@@ -1,0 +1,49 @@
+# # FastAPI
+# fastapi>=0.115.5
+# uvicorn[standard]==0.30.6
+
+# # LLM
+# langchain-groq
+# langchain-core
+
+# # RAG
+# llama-index==0.10.68
+# llama-index-vector-stores-chroma==0.1.10
+# chromadb==0.5.15
+
+# # Database
+# sqlalchemy[asyncio]==2.0.35
+# asyncpg==0.29.0
+# alembic==1.13.2
+
+# # Existing deps
+# python-dotenv==1.0.1
+# requests==2.32.3
+# yfinance==0.2.43
+# beautifulsoup4==4.12.3
+# lxml==5.3.0
+
+# # MCP
+# mcp==1.0.0
+
+# FastAPI
+fastapi>=0.115.5
+uvicorn[standard]==0.30.6
+
+# LLM
+langchain-groq
+langchain-core
+
+# Database
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.2
+
+# Existing deps
+python-dotenv==1.0.1
+requests==2.32.3
+yfinance==0.2.43
+beautifulsoup4==4.12.3
+ddgs
+pypdf
+lxml==5.3.0

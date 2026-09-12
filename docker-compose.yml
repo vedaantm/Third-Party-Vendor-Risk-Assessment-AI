@@ -1,0 +1,74 @@
+# IBM WATSON/docker-compose.yml
+#
+# Services:
+#   backend  — FastAPI + the full evaluation pipeline
+#   redis    — In-memory cache for cert results + rate limit tracking
+#
+# Why Redis?
+#   Cert cache reads currently go to Supabase (80ms network round trip).
+#   Redis serves the same data in < 1ms — 60-100x faster.
+#   Redis also lets us track Groq token usage per minute precisely,
+#   replacing the blind sleep() approach with exact rate limit management.
+#
+# Usage:
+#   Start everything:   docker-compose up
+#   Backend only:       docker-compose up backend
+#   Redis only:         docker-compose up redis
+#   Fresh start:        docker-compose down -v && docker-compose up
+
+services:
+
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - chroma_data:/app/chroma_db
+    depends_on:
+      redis:
+        condition: service_healthy   # Don't start until Redis is ready
+    environment:
+      # Redis URL — uses the service name "redis" as the hostname
+      # This works because Docker Compose puts services on the same network
+      REDIS_URL: "redis://redis:6379"
+    restart: unless-stopped
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine   # Alpine = small image (~15MB vs ~100MB full)
+    ports:
+      - "6379:6379"         # Expose to host for debugging with redis-cli
+    volumes:
+      - redis_data:/data    # Persist data across container restarts
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    # appendonly:  writes to disk every second (AOF persistence)
+    #              if Redis restarts, it replays the log and recovers data
+    # maxmemory:   if Redis fills up, evict least-recently-used keys
+    #              (LRU = old cert cache entries get evicted first)
+    # This configuration is safe for production use.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+
+volumes:
+  chroma_data:
+    # Named volume — survives container restarts and rebuilds
+    # ChromaDB vector embeddings live here
+
+  redis_data:
+    # Named volume — Redis AOF persistence
+    # Cert cache survives Redis restarts

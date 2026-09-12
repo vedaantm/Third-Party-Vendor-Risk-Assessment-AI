@@ -1,0 +1,41 @@
+# backend/requirements.txt
+# Phase 1 dependencies — async jobs, Redis, RAGAS evaluation
+
+# ── Web framework ────────────────────────────────────────────
+fastapi>=0.115.5
+uvicorn[standard]
+
+# ── LLM orchestration ────────────────────────────────────────
+langchain-groq
+langchain-core
+
+# ── Database ─────────────────────────────────────────────────
+sqlalchemy[asyncio]
+asyncpg
+python-dotenv
+
+# ── Redis — in-memory cache layer ────────────────────────────
+# redis[hiredis]: hiredis is a C extension that makes Redis 10x faster
+# If hiredis causes install issues, use just "redis" instead
+redis[hiredis]
+
+# ── HTTP + scraping ───────────────────────────────────────────
+requests
+yfinance
+beautifulsoup4
+lxml
+
+# ── Vector DB ────────────────────────────────────────────────
+chromadb
+
+# ── PDF processing ────────────────────────────────────────────
+pypdf
+
+# ── Search ────────────────────────────────────────────────────
+ddgs
+
+# ── Evaluation (RAGAS + datasets) ────────────────────────────
+# Install these in your local environment, not needed in Docker for production
+# pip install ragas datasets --break-system-packages
+# ragas
+# datasets
