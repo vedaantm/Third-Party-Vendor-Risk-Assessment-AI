@@ -1,4 +1,6 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import EvaluatePage from "./pages/EvaluatePage";
+import JobPage from "./pages/JobPage";
 
 function navClass({ isActive }: { isActive: boolean }) {
   return isActive
@@ -24,7 +26,9 @@ export default function App() {
       </header>
       <main className="mx-auto max-w-6xl px-4 py-8">
         <Routes>
-          <Route path="*" element={<p className="text-slate-600">VendorIQ</p>} />
+          <Route path="/" element={<EvaluatePage />} />
+          <Route path="/jobs/:jobId" element={<JobPage />} />
+          <Route path="*" element={<p className="text-slate-600">Page not found.</p>} />
         </Routes>
       </main>
     </div>
