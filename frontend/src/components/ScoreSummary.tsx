@@ -24,7 +24,7 @@ export default function ScoreSummary({ composite, fit, confidence, agentScores }
     <div className="space-y-4">
       <dl className="grid gap-3 sm:grid-cols-3">
         <Stat label="Composite" value={formatScore(composite)} hint="Weighted across all analyses, out of 100" />
-        <Stat label="Strategic fit" value={formatScore(fit)} hint="Strategic, operational and reputation, out of 100" />
+        <Stat label="Fit score" value={formatScore(fit)} hint="Strategic, operational and reputation, out of 100" />
         <Stat label="Confidence" value={formatPercent(confidence)} hint="Auto-approval requires 95%" />
       </dl>
       <div className="card">
