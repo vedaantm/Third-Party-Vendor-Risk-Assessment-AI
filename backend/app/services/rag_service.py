@@ -1,6 +1,9 @@
 # backend/app/services/rag_service.py
 
 import os
+import sys
+from pathlib import Path
+
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from dotenv import load_dotenv
@@ -8,6 +11,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CHROMA_PATH = os.environ.get("CHROMA_PATH", "./chroma_db")
+
+# The production vector store, relative to this file (backend/chroma_db).
+REAL_CHROMA_DIR = Path(__file__).resolve().parents[2] / "chroma_db"
+
+
+def _guard_chroma_path(path: str, under_pytest: bool) -> None:
+    """
+    Refuse to open the real backend/chroma_db while running under pytest.
+    Importing this module seeds (writes to) the store, and backend/.env sets
+    CHROMA_PATH to the real directory with override=True via
+    app.db.database — so a test that imports the app could otherwise write
+    to production data. Tests must point CHROMA_PATH at a throwaway directory
+    (tests/conftest.py does).
+    """
+    if not under_pytest:
+        return
+    resolved = Path(path).resolve()
+    real = REAL_CHROMA_DIR.resolve()
+    if resolved == real or real in resolved.parents:
+        raise RuntimeError(
+            f"Refusing to open the real ChromaDB at {resolved} under pytest. "
+            f"Set CHROMA_PATH to a temporary directory for tests."
+        )
+
+
+_guard_chroma_path(CHROMA_PATH, under_pytest="pytest" in sys.modules)
+
 _embedding_fn = ONNXMiniLM_L6_V2()
 _client = chromadb.PersistentClient(path=CHROMA_PATH)
 
