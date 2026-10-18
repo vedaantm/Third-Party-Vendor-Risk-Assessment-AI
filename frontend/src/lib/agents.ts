@@ -17,15 +17,14 @@ export function agentLabel(name: string): string {
 const TRUNCATION_FLAG = /^\[([A-Z]+)\] Agent output was truncated/;
 
 /**
- * Agents whose output was truncated. Uses `truncated_agents` when the
- * backend provides it; the job result from routes.py doesn't include it
- * today, so otherwise it's derived from the truncation red flag that the
- * meta-agent always surfaces.
+ * Agents whose output was truncated, derived from the truncation red flag
+ * the meta-agent always surfaces. Only for data that lacks the
+ * truncated_agents field: saved reports, and job results stored before
+ * routes.py started returning it. Prefer the field when it's present.
  */
-export function truncatedAgents(source: { truncated_agents?: string[] | null; red_flags?: string[] | null }): string[] {
-  if (Array.isArray(source.truncated_agents)) return [...source.truncated_agents].sort();
+export function truncatedAgentsFromRedFlags(redFlags: string[] | null | undefined): string[] {
   const found = new Set<string>();
-  for (const flag of source.red_flags ?? []) {
+  for (const flag of redFlags ?? []) {
     const m = TRUNCATION_FLAG.exec(flag);
     if (m) found.add(m[1]!.toLowerCase());
   }

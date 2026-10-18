@@ -14,6 +14,7 @@ export function evaluationResult(overrides: Partial<EvaluationResult> = {}): Eva
     ofac_status: "clear",
     ofac_matches: [],
     unavailable_agents: [],
+    truncated_agents: [],
     agent_scores: { financial: 84, compliance: 88, operational: 79, reputation: 76, strategic: 81 },
     red_flags: ["[REPUTATION] Data breach reported in 2023 [Reuters]"],
     final_explanation: "VENDOR EVALUATION SUMMARY — Okta\n\nRECOMMENDATION: REVIEW",
