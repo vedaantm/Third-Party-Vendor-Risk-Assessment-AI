@@ -39,19 +39,49 @@ def _find_cert_keyword_in_text(text: str) -> str | None:
     return None
 
 
-def _tier_for_cert(cert: str | None, tiers: dict) -> str | None:
+_SOC_REPORT_TYPE = re.compile(r"\btype[\s_-]*(ii|2|i|1)\b", re.IGNORECASE)
+
+
+def _canonical_cert_key(key: str) -> str:
+    """"SOC2_Type2", "SOC 2 Type II" → "SOC2TYPE2"."""
+    norm = _normalize(key)
+    norm = re.sub(r"TYPEII$", "TYPE2", norm)
+    return re.sub(r"TYPEI$", "TYPE1", norm)
+
+
+def _accepted_cert_prefixes(cert: str, dealbreaker_text: str) -> list[str]:
+    """
+    Which tier keys can satisfy a dealbreaker. For SOC 2 the report type
+    matters: a Type 1 report covers control design at a point in time, a
+    Type 2 report covers operating effectiveness over a period. A dealbreaker
+    requiring Type 2 is satisfied only by Type 2; one requiring Type 1 by
+    either; one naming no type by any SOC 2 report.
+    """
+    family = _normalize(cert)
+    if family != "SOC2":
+        return [family]
+    match = _SOC_REPORT_TYPE.search(dealbreaker_text or "")
+    if not match:
+        return [family]
+    if match.group(1).lower() in ("ii", "2"):
+        return ["SOC2TYPE2"]
+    return ["SOC2TYPE1", "SOC2TYPE2"]
+
+
+def _tier_for_cert(cert: str | None, tiers: dict, dealbreaker_text: str = "") -> str | None:
     """
     Dealbreaker text names a cert family ("SOC2"), but tiers are keyed by the
-    specific cert ("SOC2_Type2"). Return the strongest tier among all keys in
-    that family. Previously tiers.get("SOC2") always missed, so a SOC2
-    dealbreaker was hard-rejected even with a verified SOC2_Type2.
+    specific cert ("SOC2_Type2"). Return the strongest tier among the keys
+    that can satisfy the dealbreaker. Previously tiers.get("SOC2") always
+    missed, so a SOC2 dealbreaker was hard-rejected even with a verified
+    SOC2_Type2.
     """
     if not cert:
         return None
-    family = _normalize(cert)
+    prefixes = _accepted_cert_prefixes(cert, dealbreaker_text)
     candidates = [
         tier for key, tier in tiers.items()
-        if _normalize(key).startswith(family)
+        if any(_canonical_cert_key(key).startswith(p) for p in prefixes)
     ]
     if not candidates:
         return None
@@ -111,7 +141,7 @@ def _evaluate_dealbreakers(strategic_output: dict | None, compliance_output: dic
 
     for dealbreaker in triggered:
         cert = _find_cert_keyword_in_text(dealbreaker)
-        tier = _tier_for_cert(cert, tiers)
+        tier = _tier_for_cert(cert, tiers, dealbreaker)
 
         if tier in ("VERIFIED_REGISTRY", "CORROBORATED"):
             cleared.append(dealbreaker)

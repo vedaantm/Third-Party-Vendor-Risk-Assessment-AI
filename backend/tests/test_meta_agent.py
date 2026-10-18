@@ -432,3 +432,28 @@ def test_review_action_items_follow_red_flags(flag, expected):
 
 def test_review_with_low_confidence_requests_more_data():
     assert "75%" in _get_action_items("REVIEW", 60, 0.6, [])
+
+
+# ── SOC 2 report type in dealbreakers ─────────────────────
+
+@pytest.mark.parametrize("dealbreaker", [
+    "SOC 2 Type 2", "Must hold SOC 2 Type II report", "no SOC2 Type 2 attestation",
+])
+def test_verified_soc2_type1_does_not_clear_type2_dealbreaker(dealbreaker):
+    result = run(dealbreaker_state([dealbreaker], {"SOC2_Type1": "VERIFIED_REGISTRY"}))
+    assert result["dealbreaker_status"] == "hard_reject"
+    assert result["final_recommendation"] == "REJECT"
+
+
+@pytest.mark.parametrize("dealbreaker, tiers, status", [
+    ("SOC 2 Type 2", {"SOC2_Type2": "VERIFIED_REGISTRY"}, "clear"),
+    ("SOC 2 Type II", {"SOC2_TypeII": "CORROBORATED"}, "clear"),
+    ("SOC 2 Type 2", {"SOC2_Type1": "VERIFIED_REGISTRY", "SOC2_Type2": "SELF_REPORTED_UNVERIFIABLE"},
+     "needs_review"),
+    ("SOC 2 Type 1", {"SOC2_Type1": "VERIFIED_REGISTRY"}, "clear"),
+    ("SOC 2 Type I", {"SOC2_Type2": "VERIFIED_REGISTRY"}, "clear"),   # Type 2 covers Type 1
+    ("Must hold SOC2", {"SOC2_Type1": "VERIFIED_REGISTRY"}, "clear"), # no type named
+    ("SOC 1 Type 2", {"SOC1": "VERIFIED_REGISTRY"}, "clear"),         # only SOC 2 is type-aware
+])
+def test_soc2_report_type_rules(dealbreaker, tiers, status):
+    assert run(dealbreaker_state([dealbreaker], tiers))["dealbreaker_status"] == status
