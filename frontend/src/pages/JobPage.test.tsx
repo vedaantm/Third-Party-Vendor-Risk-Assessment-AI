@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Job } from "../api/types";
 import { MAX_CONSECUTIVE_ERRORS, POLL_INTERVAL_MS } from "../hooks/useJobPolling";
 import { json, mockFetch } from "../test/fetchMock";
-import { completedJob } from "../test/fixtures";
+import { completedJob, evaluationReport } from "../test/fixtures";
 import JobPage from "./JobPage";
 import { ROUTER_FUTURE } from "../routerFuture";
 
@@ -18,6 +18,7 @@ function job(overrides: Partial<Job>): Job {
 function serveJobs(...steps: (Job | Error | Response)[]) {
   let i = 0;
   return mockFetch((url) => {
+    if (url.pathname === "/api/v1/evaluations/eval-1a2b3c4d/report") return json(200, evaluationReport());
     if (url.pathname !== "/api/v1/jobs/job-1") return undefined;
     const step = steps[Math.min(i++, steps.length - 1)]!;
     if (step instanceof Error) throw step;
@@ -60,7 +61,9 @@ test("shows progress and step, then stops polling when complete", async () => {
 
   await nextPoll();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-  expect(screen.getAllByText(/Okta/).length).toBeGreaterThan(0);
+  expect(screen.getByRole("heading", { name: "Okta", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("REVIEW")).toBeInTheDocument();
+  expect(screen.getByText("current_ratio 1.8 [Yahoo Finance]")).toBeInTheDocument(); // report evidence loaded
   const callsAtCompletion = fetchMock.mock.calls.filter(([u]) => String(u).includes("/jobs/")).length;
   await nextPoll();
   await nextPoll();

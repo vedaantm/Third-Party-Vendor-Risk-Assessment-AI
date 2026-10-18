@@ -1,6 +1,28 @@
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { Job } from "../api/types";
+import { getReport } from "../api/client";
+import type { EvaluationReport, EvaluationResult, Job } from "../api/types";
+import ResultView from "../components/ResultView";
 import { useJobPolling } from "../hooks/useJobPolling";
+
+/** The job result has no per-agent evidence; the saved report does. */
+function CompletedJob({ result }: { result: EvaluationResult }) {
+  const [report, setReport] = useState<EvaluationReport | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getReport(result.evaluation_id, controller.signal)
+      .then(setReport)
+      .catch((err) => {
+        if (!controller.signal.aborted)
+          setReportError(`Per-analysis evidence couldn't be loaded (${err instanceof Error ? err.message : "error"}).`);
+      });
+    return () => controller.abort();
+  }, [result.evaluation_id]);
+
+  return <ResultView result={result} report={report} reportError={reportError} />;
+}
 
 function ProgressPanel({ job }: { job: Job | null }) {
   const progress = Math.max(0, Math.min(100, job?.progress ?? 0));
@@ -58,11 +80,7 @@ export default function JobPage() {
   }
 
   if (job?.status === "complete" && job.result) {
-    return (
-      <div className="card mx-auto max-w-2xl">
-        <h1 className="text-lg font-semibold">{job.result.vendor_name}: {job.result.recommendation}</h1>
-      </div>
-    );
+    return <CompletedJob result={job.result} />;
   }
 
   return (

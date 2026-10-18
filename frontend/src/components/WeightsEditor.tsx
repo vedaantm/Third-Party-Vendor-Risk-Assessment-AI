@@ -1,13 +1,6 @@
-import { AGENT_KEYS, type AgentKey, type Weights } from "../api/types";
+import { AGENT_KEYS, type Weights } from "../api/types";
+import { AGENT_LABELS } from "../lib/agents";
 import { checkWeights, DEFAULT_WEIGHTS } from "../lib/weights";
-
-export const AGENT_LABELS: Record<AgentKey, string> = {
-  financial: "Financial",
-  compliance: "Compliance",
-  operational: "Operational",
-  reputation: "Reputation",
-  strategic: "Strategic fit",
-};
 
 interface Props {
   weights: Weights;
