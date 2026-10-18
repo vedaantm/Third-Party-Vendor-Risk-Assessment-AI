@@ -17,8 +17,9 @@ Designation tiers:
   "In Process"           → CORROBORATED  (authorization in progress)
 """
 
-import re
 import requests
+
+from app.services.name_matching import names_match
 
 FEDRAMP_DATA_URL = (
     "https://raw.githubusercontent.com/"
@@ -42,18 +43,6 @@ def _load_fedramp_data() -> list:
     return _fedramp_cache
 
 
-def _names_plausibly_match(name_a: str, name_b: str) -> bool:
-    stopwords = {
-        "ltd", "limited", "inc", "incorporated", "corp", "corporation",
-        "co", "company", "technologies", "technology", "group", "plc",
-        "llc", "holdings", "the", "cloud", "services", "solutions",
-        "government", "gov",
-    }
-    tokens_a = set(re.findall(r"[a-z]+", name_a.lower())) - stopwords
-    tokens_b = set(re.findall(r"[a-z]+", name_b.lower())) - stopwords
-    return bool(tokens_a & tokens_b)
-
-
 def check_fedramp(company_name: str) -> dict:
     """
     Returns:
@@ -71,7 +60,7 @@ def check_fedramp(company_name: str) -> dict:
     for entry in entries:
         pkg = entry.get("Cloud_Service_Provider_Package", "")
         csp = entry.get("Cloud_Service_Provider_Name", "")
-        if _names_plausibly_match(company_name, pkg) or _names_plausibly_match(company_name, csp):
+        if names_match(company_name, pkg) or names_match(company_name, csp):
             matches.append(entry)
 
     if not matches:

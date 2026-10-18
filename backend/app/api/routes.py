@@ -35,6 +35,7 @@ REDIS INTEGRATION:
 """
 
 import asyncio
+import os
 import re
 import uuid
 
@@ -96,6 +97,40 @@ class EvaluateRequest(BaseModel):
 
 CERT_CACHE_TTL_DAYS = 7
 
+def _parse_cert_cache_valid_after(raw: str | None) -> datetime | None:
+    """
+    CERT_CACHE_VALID_AFTER (env, ISO date or datetime, UTC if no offset):
+    Supabase cert_cache rows cached before this instant are treated as
+    expired. Set it to the deploy date whenever cert discovery logic changes
+    in a way that invalidates cached results. Unset → no cutoff.
+
+    An unparseable value fails at startup rather than being silently ignored.
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError as e:
+        raise ValueError(
+            f"CERT_CACHE_VALID_AFTER={raw!r} is not an ISO date/datetime "
+            f"(expected e.g. 2026-10-20 or 2026-10-20T09:00:00+00:00)"
+        ) from e
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# DEPLOY NOTE — purge the cert cache when deploying a change to cert
+# discovery or registry name matching (e.g. the stricter matching in
+# app/services/name_matching.py, which removed false FedRAMP / CSA STAR /
+# EDGAR matches). Cached results from the old logic are otherwise served
+# for up to CERT_CACHE_TTL_DAYS:
+#   Supabase:  DELETE FROM cert_cache;
+#   Redis:     bump the cert key version in app/services/cache.py (now v2),
+#              or delete keys matching cert:*
+# If a purge isn't possible, set CERT_CACHE_VALID_AFTER to the deploy date.
+CERT_CACHE_VALID_AFTER = _parse_cert_cache_valid_after(
+    os.environ.get("CERT_CACHE_VALID_AFTER")
+)
+
 
 async def _read_cert_cache(vendor_name: str, db: AsyncSession) -> dict | None:
     """
@@ -122,7 +157,12 @@ async def _read_cert_cache(vendor_name: str, db: AsyncSession) -> dict | None:
     if not row:
         return None   # Cache miss — must run pipeline
 
-    age = datetime.now(timezone.utc) - row.cached_at.replace(tzinfo=timezone.utc)
+    cached_at = row.cached_at.replace(tzinfo=timezone.utc)
+    if CERT_CACHE_VALID_AFTER and cached_at < CERT_CACHE_VALID_AFTER:
+        print(f"  → Cert cache for '{vendor_name}' predates CERT_CACHE_VALID_AFTER — re-running")
+        return None
+
+    age = datetime.now(timezone.utc) - cached_at
     if age > timedelta(days=CERT_CACHE_TTL_DAYS):
         print(f"  → Cert cache expired for '{vendor_name}' ({age.days} days old) — re-running")
         return None
@@ -361,7 +401,8 @@ async def _run_evaluation_pipeline(
                     "years_in_operation": financial_data.get("years_in_operation"),
                     "certifications":     compliance_data.get("certifications_found", []),
                     "news_red_flags":     compliance_data.get("news_red_flags", []),
-                    "ofac_clear":         compliance_data.get("ofac_clear", True),
+                    "ofac_status":        compliance_data.get("ofac_status"),
+                    "ofac_clear":         compliance_data.get("ofac_clear"),
                     "revenue_growth":     financial_data.get("revenue_growth"),
                 },
                 "strategic_data": {
@@ -437,12 +478,16 @@ async def _run_evaluation_pipeline(
                     state[output_key_map[name]] = None
                     agent_results[name]         = None
 
-            # Ensure compliance output has cert tiers for meta-agent
+            # Ensure compliance output has cert tiers for meta-agent.
+            # Sanctions status is NOT taken from here by the meta-agent — it
+            # reads compliance_data directly, so it survives a failed
+            # compliance agent. This overwrite just keeps the stored agent
+            # output consistent with the deterministic screen.
             if state.get("compliance_output"):
                 state["compliance_output"]["certification_evidence_tiers"] = \
                     compliance_data.get("certification_evidence_tiers", {})
                 state["compliance_output"]["sanctions_clear"] = \
-                    compliance_data.get("ofac_clear", True)
+                    compliance_data.get("ofac_clear")
                 if agent_results.get("compliance"):
                     agent_results["compliance"]["certification_evidence_tiers"] = \
                         compliance_data.get("certification_evidence_tiers", {})
@@ -492,6 +537,9 @@ async def _run_evaluation_pipeline(
                 "fit_score":         meta_result.get("fit_score"),
                 "confidence":        meta_result.get("aggregate_confidence"),
                 "dealbreaker_status": meta_result.get("dealbreaker_status"),
+                "ofac_status":        meta_result.get("ofac_status"),
+                "ofac_matches":       compliance_data.get("ofac_matches", []),
+                "unavailable_agents": meta_result.get("unavailable_agents", []),
                 "agent_scores": {
                     name: (agent_results[name].get("score")
                            if agent_results[name] else None)

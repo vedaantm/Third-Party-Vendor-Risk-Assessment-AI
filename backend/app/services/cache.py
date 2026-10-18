@@ -92,14 +92,15 @@ async def get_cert_cache_redis(vendor_name: str) -> dict | None:
     Try to get cert discovery results from Redis.
     Returns None if not in Redis (caller should check Supabase next).
 
-    Cache key: cert:v1:{vendor_name_normalized}
-    The v1 prefix lets us invalidate the entire cache if we change the data format.
+    Cache key: cert:v2:{vendor_name_normalized}
+    The version prefix invalidates the entire cache when the data format or
+    discovery logic changes (v2: stricter registry name matching).
     """
     client = await _get_redis()
     if not client:
         return None   # Redis down — skip to Supabase
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
+    key = f"cert:v2:{vendor_name.lower().strip()}"
 
     try:
         raw = await client.get(key)
@@ -124,7 +125,7 @@ async def set_cert_cache_redis(vendor_name: str, cert_result: dict) -> None:
     if not client:
         return   # Redis down — Supabase write still happens
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
+    key = f"cert:v2:{vendor_name.lower().strip()}"
 
     try:
         await client.setex(
@@ -147,7 +148,7 @@ async def invalidate_cert_cache(vendor_name: str) -> None:
     if not client:
         return
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
+    key = f"cert:v2:{vendor_name.lower().strip()}"
     await client.delete(key)
     print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
 

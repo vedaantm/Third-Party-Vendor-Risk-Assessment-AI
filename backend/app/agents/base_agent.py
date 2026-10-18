@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -62,33 +63,17 @@ class BaseAgent(ABC):
             HumanMessage(content=user_prompt)
         ]
 
-        try:
-            response = await self.llm.ainvoke(messages)
-            result = self._parse_json_response(response.content)
-            result["reasoning"] = reasoning
-            return result
-
-        except Exception as e:
-            error_str = str(e)
-
-            # CRITICAL: Re-raise rate limit errors so the retry wrapper
-            # in routes.py can see them and retry the whole agent.
-            # Previously these were silently swallowed here, returning
-            # score: 0.0, and routes.py never knew to retry.
-            if "429" in error_str or "rate_limit_exceeded" in error_str:
-                raise
-
-            # All other errors (JSON parse, timeout, etc.) return
-            # a graceful fallback so one bad agent doesn't kill the evaluation
-            print(f"  [WARNING] Agent Step 2 failed: {error_str[:200]}")
-            return {
-                "score": 0.0,
-                "explanation": f"Agent execution failed: {error_str[:200]}",
-                "evidence": [],
-                "confidence": 0.0,
-                "red_flags": [f"Agent error — check logs"],
-                "reasoning": reasoning,
-            }
+        # Errors propagate — including AgentOutputError for unusable output.
+        # Previously any failure returned score 0.0 / confidence 0.0, which
+        # the meta-agent counted as a real score at full weight, dragging the
+        # composite down. Now the caller (routes.py) records the agent as
+        # unavailable (None), its weight is redistributed, and the meta-agent
+        # routes the evaluation to human review. Rate-limit errors also
+        # propagate here, so the retry wrapper in routes.py can retry them.
+        response = await self.llm.ainvoke(messages)
+        result = self._parse_json_response(response.content)
+        result["reasoning"] = reasoning
+        return result
 
     async def _get_reasoning(self, vendor_name: str, domain_data: dict) -> str:
         # Extract sources if present
@@ -167,7 +152,7 @@ class BaseAgent(ABC):
             "company_size", "ebitda", "industry",
             # Compliance
             "certifications_found", "certification_evidence_tiers",
-            "ofac_clear", "news_red_flags",
+            "ofac_status", "news_red_flags",
         ]
         key_data = {
             k: v for k, v in domain_data.items()
@@ -187,47 +172,88 @@ class BaseAgent(ABC):
 
     def _parse_json_response(self, raw: str) -> dict:
         print(f"\n[STEP2 RAW]:\n{raw}\n[END STEP2]")
+        return parse_agent_output(raw)
 
-        if not raw or not raw.strip():
-            print("  [WARNING] Empty Step 2 response")
-            return {
-                "score": 0.0, "explanation": "Empty model response",
-                "evidence": [], "confidence": 0.0,
-                "red_flags": ["Step 2 empty — context overflow likely"],
-            }
 
-        # Try full JSON parse first
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
-        start = cleaned.find("{")
-        end   = cleaned.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                result = json.loads(cleaned[start:end])
-                return result
-            except json.JSONDecodeError:
-                pass
+class AgentOutputError(Exception):
+    """The model's scoring output was missing, unparseable, or out of range."""
 
-        # JSON was truncated — salvage the score at minimum
-        # The model produced the right answer, just got cut off before closing }
-        score_match      = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', raw)
-        confidence_match = re.search(r'"confidence"\s*:\s*(\d+(?:\.\d+)?)', raw)
-        explanation_match = re.search(r'"explanation"\s*:\s*"([^"]{10,})"', raw)
 
-        if score_match:
-            score = float(score_match.group(1))
-            print(f"  [INFO] Partial JSON — salvaged score: {score}")
-            return {
-                "score":       score,
-                "explanation": explanation_match.group(1)[:300] if explanation_match else "Truncated response — score salvaged",
-                "evidence":    [],
-                "confidence":  float(confidence_match.group(1)) if confidence_match else 0.75,
-                "red_flags":   [],
-            }
+def _as_list(value, field: str) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return value
+    raise AgentOutputError(f"'{field}' must be a list, got {type(value).__name__}")
 
-        # Nothing salvageable
-        print(f"  [WARNING] Could not parse Step 2 output: {raw[:200]}")
-        return {
-            "score": 0.0, "explanation": f"Parse failed: {raw[:150]}",
-            "evidence": [], "confidence": 0.0,
-            "red_flags": ["JSON parse error"],
-        }
+
+def _as_number(value, field: str, low: float, high: float) -> float:
+    # bool is a subclass of int — reject it explicitly
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise AgentOutputError(f"'{field}' must be a number, got {value!r}")
+    value = float(value)
+    if not math.isfinite(value) or not (low <= value <= high):
+        raise AgentOutputError(f"'{field}' must be in [{low}, {high}], got {value}")
+    return value
+
+
+def validate_agent_output(result) -> dict:
+    """
+    Enforce the contract the meta-agent relies on. Out-of-range values are
+    rejected rather than clamped — a confidence of 85 or a score of 850 means
+    the model misread the scale, and guessing the intent would hide that.
+    """
+    if not isinstance(result, dict):
+        raise AgentOutputError(f"expected a JSON object, got {type(result).__name__}")
+    if "score" not in result or "confidence" not in result:
+        raise AgentOutputError("output is missing 'score' or 'confidence'")
+
+    result["score"]       = _as_number(result["score"], "score", 0.0, 100.0)
+    result["confidence"]  = _as_number(result["confidence"], "confidence", 0.0, 1.0)
+    result["evidence"]    = _as_list(result.get("evidence"), "evidence")
+    result["red_flags"]   = _as_list(result.get("red_flags"), "red_flags")
+    result["explanation"] = str(result.get("explanation") or "")
+    return result
+
+
+def parse_agent_output(raw: str) -> dict:
+    """
+    Parse and validate the Step 2 scoring JSON. Raises AgentOutputError when
+    nothing trustworthy can be recovered — never invents a score.
+    """
+    if not raw or not raw.strip():
+        raise AgentOutputError("empty model response (context overflow likely)")
+
+    # Try full JSON parse first
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+    start = cleaned.find("{")
+    end   = cleaned.rfind("}") + 1
+    if start != -1 and end > start:
+        try:
+            return validate_agent_output(json.loads(cleaned[start:end]))
+        except json.JSONDecodeError:
+            pass   # fall through to truncation salvage
+
+    # JSON was truncated — salvage only if BOTH score and confidence made it
+    # out. (The old fallback invented confidence = 0.75 when it was missing.)
+    # Anything after the cut-off — including red flags — is lost, so the
+    # salvaged result says so explicitly rather than looking clean.
+    score_match       = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', raw)
+    confidence_match  = re.search(r'"confidence"\s*:\s*(\d+(?:\.\d+)?)', raw)
+    explanation_match = re.search(r'"explanation"\s*:\s*"([^"]{10,})"', raw)
+
+    if score_match and confidence_match:
+        print(f"  [INFO] Partial JSON — salvaged score: {score_match.group(1)}")
+        return validate_agent_output({
+            "score":       float(score_match.group(1)),
+            "confidence":  float(confidence_match.group(1)),
+            "explanation": explanation_match.group(1)[:300] if explanation_match
+                           else "Truncated response — score salvaged",
+            "evidence":    [],
+            "red_flags":   ["Agent output was truncated — red flags may be incomplete"],
+            "truncated":   True,
+        })
+
+    raise AgentOutputError(f"could not parse scoring output: {raw[:200]!r}")
