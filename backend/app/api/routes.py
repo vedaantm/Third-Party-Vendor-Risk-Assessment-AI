@@ -569,6 +569,7 @@ async def _run_evaluation_pipeline(
                 "ofac_status":        meta_result.get("ofac_status"),
                 "ofac_matches":       compliance_data.get("ofac_matches", []),
                 "unavailable_agents": meta_result.get("unavailable_agents", []),
+                "truncated_agents":   meta_result.get("truncated_agents", []),
                 "agent_scores": {
                     name: (agent_results[name].get("score")
                            if agent_results[name] else None)
