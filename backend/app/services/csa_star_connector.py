@@ -20,8 +20,9 @@ TIER MAPPING:
 """
 
 import os
-import re
 import requests
+
+from app.services.name_matching import names_match
 
 DEMO_MODE = True
 CSA_BASE = "https://star.watch/api/v1/registry"
@@ -41,7 +42,7 @@ SEED_DATA: list[dict] = [
     {"name": "Dropbox",     "level": 2, "services": ["Dropbox Business"]},
     {"name": "Workday",     "level": 2, "services": ["Workday HCM"]},
     {"name": "CrowdStrike", "level": 2, "services": ["Falcon Platform"]},
-    {"name": "Palo Alto",   "level": 2, "services": ["Prisma Cloud"]},
+    {"name": "Palo Alto Networks", "level": 2, "services": ["Prisma Cloud"]},
     {"name": "Okta",        "level": 2, "services": ["Okta Identity Cloud"]},
     {"name": "Zscaler",     "level": 2, "services": ["Zscaler Internet Access"]},
     # Level 1 = self-assessment publicly filed with CSA (CORROBORATED)
@@ -54,20 +55,9 @@ SEED_DATA: list[dict] = [
 ]
 
 
-def _names_plausibly_match(name_a: str, name_b: str) -> bool:
-    stopwords = {
-        "ltd", "limited", "inc", "incorporated", "corp", "corporation",
-        "co", "company", "technologies", "technology", "group", "plc",
-        "llc", "holdings", "the", "cloud", "services", "solutions",
-    }
-    tokens_a = set(re.findall(r"[a-z]+", name_a.lower())) - stopwords
-    tokens_b = set(re.findall(r"[a-z]+", name_b.lower())) - stopwords
-    return bool(tokens_a & tokens_b)
-
-
 def _check_seed(company_name: str) -> dict:
     for entry in SEED_DATA:
-        if _names_plausibly_match(company_name, entry["name"]):
+        if names_match(company_name, entry["name"]):
             tier = "VERIFIED_REGISTRY" if entry["level"] == 2 else "CORROBORATED"
             label = "third-party certified (Level 2)" if entry["level"] == 2 else "self-assessment filed (Level 1)"
             return {
@@ -113,7 +103,7 @@ def _check_live(company_name: str) -> dict:
         print("  → CSA_STAR_API_KEY not set")
         return empty
     orgs = _load_orgs(headers)
-    org = next((o for o in orgs if _names_plausibly_match(company_name, o.get("name", ""))), None)
+    org = next((o for o in orgs if names_match(company_name, o.get("name", ""))), None)
     if not org:
         return empty
     org_id = org["id"]

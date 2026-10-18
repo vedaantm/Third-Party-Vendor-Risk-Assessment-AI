@@ -35,14 +35,16 @@ REDIS INTEGRATION:
 """
 
 import asyncio
+import math
+import os
 import re
 import uuid
 
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, update
 
@@ -80,10 +82,14 @@ class ClientProfile(BaseModel):
     nice_to_have:   list[str]
 
 
+AGENT_WEIGHT_KEYS = ("financial", "compliance", "operational", "reputation", "strategic")
+WEIGHT_SUM_TOLERANCE = 1e-3   # allows float rounding, e.g. 0.30+0.25+0.20+0.10+0.15
+
+
 class EvaluateRequest(BaseModel):
     vendor_name:    str
     client_profile: ClientProfile
-    weights: dict = {
+    weights: dict[str, float] = {
         "financial":   0.30,
         "compliance":  0.25,
         "operational": 0.20,
@@ -91,10 +97,68 @@ class EvaluateRequest(BaseModel):
         "strategic":   0.15,
     }
 
+    @field_validator("weights")
+    @classmethod
+    def _validate_weights(cls, weights: dict[str, float]) -> dict[str, float]:
+        """
+        Weights must name exactly the five agents, each finite and >= 0, and
+        sum to 1. Previously any dict was accepted: negative weights distorted
+        the composite, totals != 1 put scores from different requests on
+        different scales, and a misspelt key silently fell back to its default.
+        """
+        unknown = sorted(set(weights) - set(AGENT_WEIGHT_KEYS))
+        missing = [k for k in AGENT_WEIGHT_KEYS if k not in weights]
+        if unknown or missing:
+            raise ValueError(
+                f"weights must have exactly these keys: {list(AGENT_WEIGHT_KEYS)} "
+                f"(unknown: {unknown}, missing: {missing})"
+            )
+        bad = {k: v for k, v in weights.items() if not math.isfinite(v) or v < 0}
+        if bad:
+            raise ValueError(f"weights must be finite and >= 0, got {bad}")
+        total = sum(weights.values())
+        if abs(total - 1.0) > WEIGHT_SUM_TOLERANCE:
+            raise ValueError(f"weights must sum to 1.0, got {total:.4f}")
+        return weights
+
 
 # ─── Cache Helpers (Three-Tier: Redis → Supabase → Pipeline) ─────────────────
 
 CERT_CACHE_TTL_DAYS = 7
+
+def _parse_cert_cache_valid_after(raw: str | None) -> datetime | None:
+    """
+    CERT_CACHE_VALID_AFTER (env, ISO date or datetime, UTC if no offset):
+    Supabase cert_cache rows cached before this instant are treated as
+    expired. Set it to the deploy date whenever cert discovery logic changes
+    in a way that invalidates cached results. Unset → no cutoff.
+
+    An unparseable value fails at startup rather than being silently ignored.
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError as e:
+        raise ValueError(
+            f"CERT_CACHE_VALID_AFTER={raw!r} is not an ISO date/datetime "
+            f"(expected e.g. 2026-10-20 or 2026-10-20T09:00:00+00:00)"
+        ) from e
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# DEPLOY NOTE — purge the cert cache when deploying a change to cert
+# discovery or registry name matching (e.g. the stricter matching in
+# app/services/name_matching.py, which removed false FedRAMP / CSA STAR /
+# EDGAR matches). Cached results from the old logic are otherwise served
+# for up to CERT_CACHE_TTL_DAYS:
+#   Supabase:  DELETE FROM cert_cache;
+#   Redis:     bump the cert key version in app/services/cache.py (now v2),
+#              or delete keys matching cert:*
+# If a purge isn't possible, set CERT_CACHE_VALID_AFTER to the deploy date.
+CERT_CACHE_VALID_AFTER = _parse_cert_cache_valid_after(
+    os.environ.get("CERT_CACHE_VALID_AFTER")
+)
 
 
 async def _read_cert_cache(vendor_name: str, db: AsyncSession) -> dict | None:
@@ -122,7 +186,12 @@ async def _read_cert_cache(vendor_name: str, db: AsyncSession) -> dict | None:
     if not row:
         return None   # Cache miss — must run pipeline
 
-    age = datetime.now(timezone.utc) - row.cached_at.replace(tzinfo=timezone.utc)
+    cached_at = row.cached_at.replace(tzinfo=timezone.utc)
+    if CERT_CACHE_VALID_AFTER and cached_at < CERT_CACHE_VALID_AFTER:
+        print(f"  → Cert cache for '{vendor_name}' predates CERT_CACHE_VALID_AFTER — re-running")
+        return None
+
+    age = datetime.now(timezone.utc) - cached_at
     if age > timedelta(days=CERT_CACHE_TTL_DAYS):
         print(f"  → Cert cache expired for '{vendor_name}' ({age.days} days old) — re-running")
         return None
@@ -361,7 +430,8 @@ async def _run_evaluation_pipeline(
                     "years_in_operation": financial_data.get("years_in_operation"),
                     "certifications":     compliance_data.get("certifications_found", []),
                     "news_red_flags":     compliance_data.get("news_red_flags", []),
-                    "ofac_clear":         compliance_data.get("ofac_clear", True),
+                    "ofac_status":        compliance_data.get("ofac_status"),
+                    "ofac_clear":         compliance_data.get("ofac_clear"),
                     "revenue_growth":     financial_data.get("revenue_growth"),
                 },
                 "strategic_data": {
@@ -437,12 +507,16 @@ async def _run_evaluation_pipeline(
                     state[output_key_map[name]] = None
                     agent_results[name]         = None
 
-            # Ensure compliance output has cert tiers for meta-agent
+            # Ensure compliance output has cert tiers for meta-agent.
+            # Sanctions status is NOT taken from here by the meta-agent — it
+            # reads compliance_data directly, so it survives a failed
+            # compliance agent. This overwrite just keeps the stored agent
+            # output consistent with the deterministic screen.
             if state.get("compliance_output"):
                 state["compliance_output"]["certification_evidence_tiers"] = \
                     compliance_data.get("certification_evidence_tiers", {})
                 state["compliance_output"]["sanctions_clear"] = \
-                    compliance_data.get("ofac_clear", True)
+                    compliance_data.get("ofac_clear")
                 if agent_results.get("compliance"):
                     agent_results["compliance"]["certification_evidence_tiers"] = \
                         compliance_data.get("certification_evidence_tiers", {})
@@ -492,6 +566,9 @@ async def _run_evaluation_pipeline(
                 "fit_score":         meta_result.get("fit_score"),
                 "confidence":        meta_result.get("aggregate_confidence"),
                 "dealbreaker_status": meta_result.get("dealbreaker_status"),
+                "ofac_status":        meta_result.get("ofac_status"),
+                "ofac_matches":       compliance_data.get("ofac_matches", []),
+                "unavailable_agents": meta_result.get("unavailable_agents", []),
                 "agent_scores": {
                     name: (agent_results[name].get("score")
                            if agent_results[name] else None)
@@ -686,9 +763,12 @@ async def search_companies(q: str = ""):
 
 # ─── GET /evaluations ─────────────────────────────────────────────────────────
 
+MAX_LIST_LIMIT = 100   # list endpoints return full rows; keep responses bounded
+
+
 @router.get("/evaluations")
 async def list_evaluations(
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=MAX_LIST_LIMIT),
     db:    AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -769,7 +849,10 @@ async def get_evaluation(evaluation_id: str, db: AsyncSession = Depends(get_db))
 # ─── GET /jobs ────────────────────────────────────────────────────────────────
 
 @router.get("/jobs")
-async def list_jobs(limit: int = 20, db: AsyncSession = Depends(get_db)):
+async def list_jobs(
+    limit: int = Query(20, ge=1, le=MAX_LIST_LIMIT),
+    db: AsyncSession = Depends(get_db),
+):
     """List recent jobs — useful for debugging and the history dashboard."""
     result = await db.execute(
         select(Job).order_by(desc(Job.created_at)).limit(limit)

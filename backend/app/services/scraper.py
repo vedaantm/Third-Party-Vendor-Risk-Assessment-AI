@@ -5,6 +5,8 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 from datetime import datetime
 
+from app.services.ofac_screening import check_ofac
+
 # ── Industry classification ────────────────────────────────────────────────
 
 # Maps yfinance's freeform industry strings to the standard taxonomy
@@ -167,13 +169,6 @@ def scrape_vendor_financials(company_name: str) -> dict:
             sources[key] = "Macrotrends"
         print(f"  ✅ Revenue history from Macrotrends: {list(revenue.keys())}")
 
-    credit = _scrape_credit_yahoo(company_name)
-    if credit:
-        data.update(credit)
-        for key in credit:
-            sources[key] = "Yahoo Finance"
-        print(f"  ✅ Credit info from Yahoo Finance: {credit}")
-
     # Fallback: classify industry for private companies where yfinance
     # returned no industry. Without this, routes.py falls back to the
     # CLIENT's industry for the vendor — which is wrong.
@@ -195,7 +190,8 @@ def scrape_vendor_compliance(company_name: str, industry: str = None) -> dict:
     if industry:
         data["industry"] = industry
 
-    data["ofac_clear"] = _check_ofac(company_name)
+    # ofac_status / ofac_clear / ofac_matches — see ofac_screening.py
+    data.update(check_ofac(company_name))
     # _scrape_certifications removed — cert detection now handled by
     # compliance_discovery.py (EDGAR + CSA STAR + FedRAMP + web fallback)
     # which routes.py calls separately and merges into compliance_data.
@@ -293,7 +289,8 @@ def _scrape_yfinance(company_name: str) -> dict:
             "net_margin":           round(info.get("profitMargins", 0) * 100, 2) if info.get("profitMargins") else None,
             "gross_margin":         round(info.get("grossMargins", 0) * 100, 2) if info.get("grossMargins") else None,
             "revenue_growth":       round(info.get("revenueGrowth", 0) * 100, 2) if info.get("revenueGrowth") else None,
-            "credit_rating":        info.get("creditRating", "N/A"),
+            # Absent → dropped below, so agents see "not provided" rather than "N/A"
+            "credit_rating":        info.get("creditRating"),
             "customer_count":       None,
             "top_customer_revenue": None,
             "duns_credit_score":    None,
@@ -408,50 +405,15 @@ def _scrape_revenue_macrotrends(company_name: str) -> dict:
         return {}
 
 
-def _scrape_credit_yahoo(company_name: str) -> dict:
-    try:
-        ticker_symbol = _find_ticker(company_name)
-        if not ticker_symbol:
-            return {}
-
-        url     = f"https://finance.yahoo.com/quote/{ticker_symbol}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp    = requests.get(url, headers=headers, timeout=6)
-
-        if resp.status_code != 200:
-            return {}
-
-        text  = BeautifulSoup(resp.text, "html.parser").get_text()
-        match = re.search(
-            r"(AAA|AA\+|AA|AA-|A\+|A|A-|BBB\+|BBB|BBB-|BB\+|BB|BB-|B\+|B|CCC)",
-            text
-        )
-        return {"credit_rating": match.group(1)} if match else {}
-
-    except Exception as e:
-        print(f"  → Yahoo Finance error: {e}")
-        return {}
+# Credit rating: there is no reliable free source. The old Yahoo quote-page
+# scrape regex-matched the first capital "A"/"B" anywhere on the page, so it
+# reported a rating for almost every company. Removed — agents now see
+# credit_rating only when yfinance actually provides one.
 
 
 # ══════════════════════════════════════════════════════════
 # COMPLIANCE SCRAPERS
 # ══════════════════════════════════════════════════════════
-
-def _check_ofac(company_name: str) -> bool:
-    try:
-        resp = requests.get(
-            "https://sanctionslistservice.ofac.treas.gov/"
-            "api/PublicationPreview/resources/SDN.JSON",
-            timeout=5
-        )
-        if resp.status_code == 200:
-            if company_name.lower() in resp.text.lower():
-                print(f"  ⚠️  OFAC: Possible match for {company_name}")
-                return False
-        return True
-    except Exception:
-        return True
-
 
 def _scrape_certifications(company_name: str) -> dict:
     certs_found   = []
