@@ -1,6 +1,7 @@
 # IBM WATSON/docker-compose.yml
 #
 # Services:
+#   frontend — VendorIQ web app (nginx serving the Vite build) on :5173
 #   backend  — FastAPI + the full evaluation pipeline
 #   redis    — In-memory cache for cert results + rate limit tracking
 #
@@ -17,6 +18,19 @@
 #   Fresh start:        docker-compose down -v && docker-compose up
 
 services:
+
+  # ── VendorIQ Frontend ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser calls the API directly, so this is the host-side URL
+        VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:80"              # must match CORS_ALLOW_ORIGINS on the backend
+    depends_on:
+      - backend
+    restart: unless-stopped
 
   # ── FastAPI Backend ─────────────────────────────────────────────────────────
   backend:
@@ -36,6 +50,8 @@ services:
       # Redis URL — uses the service name "redis" as the hostname
       # This works because Docker Compose puts services on the same network
       REDIS_URL: "redis://redis:6379"
+      # Browser origin of the frontend service above
+      CORS_ALLOW_ORIGINS: "http://localhost:5173"
     restart: unless-stopped
 
   # ── Redis ───────────────────────────────────────────────────────────────────
