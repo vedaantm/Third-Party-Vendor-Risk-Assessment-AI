@@ -16,6 +16,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
+from app.services.name_matching import names_match
 from app.services.scraper import _find_ticker
 
 EDGAR_HEADERS = {"User-Agent": "VendorRiskPlatform research-contact@example.com"}
@@ -79,17 +80,6 @@ def _load_ticker_cik_map() -> dict:
     return _ticker_cik_cache
 
 
-def _names_plausibly_match(name_a: str, name_b: str) -> bool:
-    stopwords = {
-        "ltd", "limited", "inc", "incorporated", "corp", "corporation",
-        "co", "company", "technologies", "technology", "group", "plc",
-        "llc", "holdings", "the", "se", "ag", "nv", "bv",
-    }
-    tokens_a = set(re.findall(r"[a-z]+", name_a.lower())) - stopwords
-    tokens_b = set(re.findall(r"[a-z]+", name_b.lower())) - stopwords
-    return bool(tokens_a & tokens_b)
-
-
 def _resolve_cik_by_name(company_name: str) -> str | None:
     try:
         resp = requests.get(
@@ -122,7 +112,7 @@ def _fetch_and_validate_submissions(cik: str, company_name: str) -> tuple[str | 
         data = resp.json()
         registered_name = data.get("name", "")
 
-        if not _names_plausibly_match(company_name, registered_name):
+        if not names_match(company_name, registered_name):
             print(f"  → CIK {cik} name mismatch: '{registered_name}' ≠ '{company_name}' — rejecting")
             return None, None
 
@@ -165,7 +155,7 @@ def _resolve_cik(
         bare_ticker = ticker_symbol.split(".")[0].upper()
         ticker_map = _load_ticker_cik_map()
         entry = ticker_map.get(bare_ticker)
-        if entry and _names_plausibly_match(company_name, entry["title"]):
+        if entry and names_match(company_name, entry["title"]):
             candidate_cik = str(entry["cik"]).zfill(10)
 
     if candidate_cik:

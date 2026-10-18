@@ -36,6 +36,7 @@ GRACEFUL DEGRADATION:
 import json
 import os
 import asyncio
+import time
 from typing import Any
 from datetime import timedelta
 
@@ -43,19 +44,26 @@ from datetime import timedelta
 _redis_client = None
 _redis_available = None   # None = not checked yet, True/False = checked
 
+# After a failed connection, wait this long before trying again. Without a
+# retry, one failure (e.g. Redis starting after the app) disabled Redis until
+# the process restarted; retrying on every call would instead add the 2s
+# connect timeout to every cache read while Redis is down.
+REDIS_RETRY_INTERVAL_SECONDS = 30.0
+_redis_retry_at = 0.0     # time.monotonic() after which a reconnect is allowed
+
 
 async def _get_redis():
     """
     Get or create the Redis client.
     Returns None if Redis is not available (graceful degradation).
     """
-    global _redis_client, _redis_available
-
-    if _redis_available is False:
-        return None   # Already know it's down — don't retry every call
+    global _redis_client, _redis_available, _redis_retry_at
 
     if _redis_client is not None:
         return _redis_client
+
+    if _redis_available is False and time.monotonic() < _redis_retry_at:
+        return None   # Down recently — don't retry on every call
 
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
@@ -78,7 +86,9 @@ async def _get_redis():
 
     except Exception as e:
         _redis_available = False
-        print(f"⚠ Redis not available ({e}) — using Supabase-only cache mode")
+        _redis_retry_at = time.monotonic() + REDIS_RETRY_INTERVAL_SECONDS
+        print(f"⚠ Redis not available ({e}) — using Supabase-only cache mode, "
+              f"retrying in {REDIS_RETRY_INTERVAL_SECONDS:.0f}s")
         return None
 
 
@@ -92,14 +102,15 @@ async def get_cert_cache_redis(vendor_name: str) -> dict | None:
     Try to get cert discovery results from Redis.
     Returns None if not in Redis (caller should check Supabase next).
 
-    Cache key: cert:v1:{vendor_name_normalized}
-    The v1 prefix lets us invalidate the entire cache if we change the data format.
+    Cache key: cert:v2:{vendor_name_normalized}
+    The version prefix invalidates the entire cache when the data format or
+    discovery logic changes (v2: stricter registry name matching).
     """
     client = await _get_redis()
     if not client:
         return None   # Redis down — skip to Supabase
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
+    key = f"cert:v2:{vendor_name.lower().strip()}"
 
     try:
         raw = await client.get(key)
@@ -124,7 +135,7 @@ async def set_cert_cache_redis(vendor_name: str, cert_result: dict) -> None:
     if not client:
         return   # Redis down — Supabase write still happens
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
+    key = f"cert:v2:{vendor_name.lower().strip()}"
 
     try:
         await client.setex(
@@ -147,9 +158,12 @@ async def invalidate_cert_cache(vendor_name: str) -> None:
     if not client:
         return
 
-    key = f"cert:v1:{vendor_name.lower().strip()}"
-    await client.delete(key)
-    print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
+    key = f"cert:v2:{vendor_name.lower().strip()}"
+    try:
+        await client.delete(key)
+        print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
+    except Exception as e:
+        print(f"  ⚠ Redis delete error: {e}")
 
 
 # ─── Token Rate Limiter (Redis) ───────────────────────────────────────────────

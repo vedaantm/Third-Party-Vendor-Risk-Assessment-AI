@@ -1,0 +1,9 @@
+# backend/requirements-dev.txt
+# Test-only dependencies — not installed in the Docker image.
+#   pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+#   python -m pytest backend/tests/ -v
+
+pytest==8.4.2
+httpx==0.28.1        # FastAPI ASGI test client
+aiosqlite==0.22.1    # SQLite stand-in for Supabase in tests
+fakeredis==2.40.0    # in-memory Redis for cache tests
