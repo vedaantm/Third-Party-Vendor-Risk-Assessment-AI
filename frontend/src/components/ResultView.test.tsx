@@ -24,6 +24,14 @@ test("shows recommendation, headline scores and the five agent scores", () => {
   expect(within(agents).getByText("84.0")).toBeInTheDocument();
 });
 
+test("summary cards are labelled Composite, Fit score and Confidence", () => {
+  renderResult(evaluationResult());
+  expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["Composite", "Fit score", "Confidence"]);
+  const fit = screen.getByText("Fit score").closest("div")!;
+  expect(fit).toHaveTextContent("78.6");
+  expect(fit).toHaveTextContent("Strategic, operational and reputation, out of 100");
+});
+
 test("an unavailable agent score shows N/A and the warning", () => {
   renderResult(
     evaluationResult({
