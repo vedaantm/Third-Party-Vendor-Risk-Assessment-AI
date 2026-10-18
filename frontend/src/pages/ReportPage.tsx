@@ -8,10 +8,10 @@ import OfacBanner from "../components/OfacBanner";
 import RecommendationBadge from "../components/RecommendationBadge";
 import RedFlagList from "../components/RedFlagList";
 import ScoreSummary from "../components/ScoreSummary";
-import { AGENT_LABELS, notRunAgents, truncatedAgents } from "../lib/agents";
+import { AGENT_LABELS, notRunAgents, truncatedAgentsFromRedFlags } from "../lib/agents";
 import { formatDate } from "../lib/format";
 
-/** The report endpoint doesn't return the OFAC result — the evaluations table doesn't store it. */
+/** The report endpoint doesn't return the OFAC result or truncated_agents — the evaluations table doesn't store them. */
 const OFAC_NOT_STORED =
   "Saved reports don't include the OFAC screening result. Check the original evaluation, or screen this vendor manually.";
 
@@ -69,7 +69,7 @@ export default function ReportPage() {
       </div>
 
       <OfacBanner status={null} missingNote={OFAC_NOT_STORED} />
-      <AgentWarnings unavailable={notRunAgents(report.agent_breakdown)} truncated={truncatedAgents(report)} />
+      <AgentWarnings unavailable={notRunAgents(report.agent_breakdown)} truncated={truncatedAgentsFromRedFlags(report.red_flags)} />
 
       <ScoreSummary
         composite={report.scores.composite}

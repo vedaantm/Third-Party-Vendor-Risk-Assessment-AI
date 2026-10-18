@@ -24,6 +24,14 @@ test("shows recommendation, headline scores and the five agent scores", () => {
   expect(within(agents).getByText("84.0")).toBeInTheDocument();
 });
 
+test("summary cards are labelled Composite, Fit score and Confidence", () => {
+  renderResult(evaluationResult());
+  expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["Composite", "Fit score", "Confidence"]);
+  const fit = screen.getByText("Fit score").closest("div")!;
+  expect(fit).toHaveTextContent("78.6");
+  expect(fit).toHaveTextContent("Strategic, operational and reputation, out of 100");
+});
+
 test("an unavailable agent score shows N/A and the warning", () => {
   renderResult(
     evaluationResult({
@@ -35,12 +43,23 @@ test("an unavailable agent score shows N/A and the warning", () => {
   expect(screen.getByTestId("unavailable-agents")).toHaveTextContent("Operational");
 });
 
-test("truncation is detected from the job result's red flags", () => {
-  renderResult(
-    evaluationResult({
-      red_flags: ["[FINANCIAL] Agent output was truncated — red flags may be incomplete"],
-    }),
-  );
+test("truncation is read directly from truncated_agents", () => {
+  // No truncation red flag — the warning must come from the field itself
+  renderResult(evaluationResult({ truncated_agents: ["financial", "strategic"], red_flags: [] }));
+  expect(screen.getByTestId("truncated-agents")).toHaveTextContent("Output cut off for: Financial, Strategic fit");
+});
+
+test("an explicit empty truncated_agents shows no warning", () => {
+  renderResult(evaluationResult({ truncated_agents: [] }));
+  expect(screen.queryByTestId("truncated-agents")).not.toBeInTheDocument();
+});
+
+test("job results stored before the field existed fall back to red flags", () => {
+  const legacy = evaluationResult({
+    red_flags: ["[FINANCIAL] Agent output was truncated — red flags may be incomplete"],
+  });
+  delete legacy.truncated_agents;
+  renderResult(legacy);
   expect(screen.getByTestId("truncated-agents")).toHaveTextContent("Output cut off for: Financial");
 });
 

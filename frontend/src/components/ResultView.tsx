@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { EvaluationReport, EvaluationResult } from "../api/types";
-import { truncatedAgents } from "../lib/agents";
+import { truncatedAgentsFromRedFlags } from "../lib/agents";
 import AgentEvidence from "./AgentEvidence";
 import AgentWarnings from "./AgentWarnings";
 import CertificationTiers from "./CertificationTiers";
@@ -22,7 +22,8 @@ interface Props {
 }
 
 export default function ResultView({ result, report, reportError }: Props) {
-  const truncated = truncatedAgents(result);
+  // Older stored results predate the field; only they fall back to red flags
+  const truncated = result.truncated_agents ?? truncatedAgentsFromRedFlags(result.red_flags);
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
