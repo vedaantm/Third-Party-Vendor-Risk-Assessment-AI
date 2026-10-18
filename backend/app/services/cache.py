@@ -36,6 +36,7 @@ GRACEFUL DEGRADATION:
 import json
 import os
 import asyncio
+import time
 from typing import Any
 from datetime import timedelta
 
@@ -43,19 +44,26 @@ from datetime import timedelta
 _redis_client = None
 _redis_available = None   # None = not checked yet, True/False = checked
 
+# After a failed connection, wait this long before trying again. Without a
+# retry, one failure (e.g. Redis starting after the app) disabled Redis until
+# the process restarted; retrying on every call would instead add the 2s
+# connect timeout to every cache read while Redis is down.
+REDIS_RETRY_INTERVAL_SECONDS = 30.0
+_redis_retry_at = 0.0     # time.monotonic() after which a reconnect is allowed
+
 
 async def _get_redis():
     """
     Get or create the Redis client.
     Returns None if Redis is not available (graceful degradation).
     """
-    global _redis_client, _redis_available
-
-    if _redis_available is False:
-        return None   # Already know it's down — don't retry every call
+    global _redis_client, _redis_available, _redis_retry_at
 
     if _redis_client is not None:
         return _redis_client
+
+    if _redis_available is False and time.monotonic() < _redis_retry_at:
+        return None   # Down recently — don't retry on every call
 
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
@@ -78,7 +86,9 @@ async def _get_redis():
 
     except Exception as e:
         _redis_available = False
-        print(f"⚠ Redis not available ({e}) — using Supabase-only cache mode")
+        _redis_retry_at = time.monotonic() + REDIS_RETRY_INTERVAL_SECONDS
+        print(f"⚠ Redis not available ({e}) — using Supabase-only cache mode, "
+              f"retrying in {REDIS_RETRY_INTERVAL_SECONDS:.0f}s")
         return None
 
 
@@ -149,8 +159,11 @@ async def invalidate_cert_cache(vendor_name: str) -> None:
         return
 
     key = f"cert:v2:{vendor_name.lower().strip()}"
-    await client.delete(key)
-    print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
+    try:
+        await client.delete(key)
+        print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
+    except Exception as e:
+        print(f"  ⚠ Redis delete error: {e}")
 
 
 # ─── Token Rate Limiter (Redis) ───────────────────────────────────────────────

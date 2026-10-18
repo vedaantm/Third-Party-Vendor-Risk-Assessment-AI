@@ -152,7 +152,8 @@ OFAC_STATUS_TEXT = {
         "Apply the OFAC automatic override."
     ),
     "possible_match": (
-        "POSSIBLE MATCH — vendor name partially matches OFAC SDN entries; "
+        "POSSIBLE MATCH — vendor name overlaps OFAC SDN entries, or exactly "
+        "matches one but is too short or generic to confirm on name alone; "
         "not confirmed. Do NOT apply the automatic override. Add a red flag "
         "that manual sanctions screening is required."
     ),

@@ -93,16 +93,27 @@ Respond ONLY with valid JSON, no preamble:
 REGULATIONS = {"GDPR", "CCPA", "SOX", "FCPA"}
 
 
+_RETRY_PHRASE = re.compile(
+    r"try again in\s+((?:\d+(?:\.\d+)?(?:ms|h|m|s))+)", re.IGNORECASE
+)
+_DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)", re.IGNORECASE)
+_UNIT_SECONDS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+
+
 def _parse_wait_seconds(error_str: str) -> float:
-    hours   = re.search(r"(\d+)h", error_str)
-    minutes = re.search(r"(\d+)m(?!s)", error_str)
-    seconds = re.search(r"(\d+(?:\.\d+)?)s(?!\w)", error_str)
-    millis  = re.search(r"(\d+(?:\.\d+)?)ms", error_str)
-    total = 0.0
-    if hours:   total += float(hours.group(1)) * 3600
-    if minutes: total += float(minutes.group(1)) * 60
-    if seconds: total += float(seconds.group(1))
-    if millis and not seconds: total += float(millis.group(1)) / 1000
+    """
+    Parse Groq's "try again in 7m12.5s" duration. Only the duration after
+    "try again in" is read — previously the whole message was searched, so
+    digits in e.g. an organization id ("org_01hx…") were taken as hours and
+    a short wait looked like a daily limit.
+    """
+    phrase = _RETRY_PHRASE.search(error_str)
+    if not phrase:
+        return 10.0
+    total = sum(
+        float(value) * _UNIT_SECONDS[unit.lower()]
+        for value, unit in _DURATION_PART.findall(phrase.group(1))
+    )
     return total if total > 0 else 10.0
 
 
@@ -117,14 +128,20 @@ def _empty_result() -> dict:
 
 
 def _parse_llm_output(raw: str) -> dict:
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
+    """
+    Locate the JSON object anywhere in the reply — previously a fence was
+    only stripped at the very start, so any preamble made the whole batch
+    parse as empty and its certifications were silently lost.
+    """
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip()
+    start, end = cleaned.find("{"), cleaned.rfind("}") + 1
+    if start == -1 or end <= start:
+        return _empty_result()
     try:
-        return json.loads(raw.strip())
+        parsed = json.loads(cleaned[start:end])
     except json.JSONDecodeError:
         return _empty_result()
+    return parsed if isinstance(parsed, dict) else _empty_result()
 
 
 def _sanitize(result: dict) -> dict:

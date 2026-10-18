@@ -10,8 +10,10 @@ Replaces the old substring check in scraper.py, which:
 
 Result statuses:
   clear           no SDN entity/individual name or alias matches
-  match           exact core-name match against an SDN name or alias → REJECT
-  possible_match  whole-word overlap with an SDN name or alias      → REVIEW
+  match           exact core-name match against an SDN name or alias,
+                  and the name is specific (2+ words, not all generic) → REJECT
+  possible_match  whole-word overlap with an SDN name or alias, or an
+                  exact match on a single-word / generic name         → REVIEW
   unavailable     the SDN list could not be loaded                   → REVIEW
 
 ofac_clear is True only for "clear", False only for "match", and None
@@ -36,6 +38,43 @@ MAX_REPORTED_MATCHES = 5
 # Vessels and aircraft are listed by craft name ("OCEAN STAR"), not by the
 # legal entity a vendor would contract with — skip them to avoid noise.
 _SKIPPED_SDN_TYPES = {"vessel", "aircraft"}
+
+# Words too common in company names to identify an entity on their own.
+# A name made only of these (plus connectors) — or a single word — that
+# exactly matches an SDN entry is reported as possible_match, not match:
+# "Atlas" equals "ATLAS HOLDING" once the legal suffix is removed, but a
+# vendor called Atlas is far more likely to be someone else. Heuristic —
+# extend it as false positives are found.
+GENERIC_NAME_WORDS = {
+    # connectors
+    "of", "and", "the", "for", "de", "del", "la", "le", "al", "el",
+    # corporate descriptors
+    "global", "international", "intl", "general", "united", "national",
+    "universal", "worldwide", "world", "central", "first", "new", "prime",
+    "premier", "royal", "golden", "star", "delta", "atlas", "alpha", "omega",
+    "trading", "trade", "traders", "import", "export", "industries",
+    "industrial", "industry", "enterprises", "enterprise", "services",
+    "service", "solutions", "systems", "technologies", "technology", "tech",
+    "consulting", "management", "partners", "associates", "ventures",
+    "capital", "investment", "investments", "finance", "financial", "bank",
+    "fund", "trust", "resources", "development", "construction",
+    "engineering", "logistics", "shipping", "transport", "transportation",
+    "cargo", "freight", "express", "marine", "maritime", "energy", "power",
+    "oil", "gas", "petroleum", "petro", "chemical", "chemicals", "steel",
+    "metals", "mining", "electronics", "electric", "media", "network",
+    "networks", "data", "digital", "smart", "supply", "supplies", "parts",
+    "equipment", "materials", "products", "commercial", "agency",
+    # colours, directions, regions
+    "red", "blue", "green", "black", "white", "east", "west", "north",
+    "south", "eastern", "western", "northern", "southern", "middle",
+    "pacific", "atlantic", "gulf", "ocean", "sea", "sky", "air",
+}
+
+
+def _name_is_specific(tokens: list[str]) -> bool:
+    """At least two words, at least one of them not generic."""
+    return len(tokens) >= 2 and any(t not in GENERIC_NAME_WORDS for t in tokens)
+
 
 _sdn_cache: list[dict] | None = None
 _sdn_loaded_at: float = 0.0
@@ -122,7 +161,8 @@ def screen_name(company_name: str, entries: list[dict] | None) -> dict:
         # Nothing meaningful to screen (empty / punctuation-only name)
         return {"ofac_status": "unavailable", "ofac_clear": None, "ofac_matches": []}
 
-    exact, possible = [], []
+    specific = _name_is_specific(query)
+    exact, exact_generic, overlap = [], [], []
     for entry in entries:
         token_lists = entry.get("token_lists")
         if token_lists is None:
@@ -130,9 +170,15 @@ def screen_name(company_name: str, entries: list[dict] | None) -> dict:
         label = f"{entry['name']} [{entry['program']}] (SDN #{entry['ent_num']})"
         # An exact hit on any name or alias outranks a partial hit on another
         if any(t == query for t in token_lists):
-            exact.append(label)
+            if specific:
+                exact.append(label)
+            else:
+                exact_generic.append(f"{label} — exact name match, but the name "
+                                     f"is too short or generic to confirm")
         elif any(tokens_overlap(query, t) for t in token_lists):
-            possible.append(label)
+            overlap.append(label)
+    # Exact-but-generic hits first, so the report cap never hides them
+    possible = exact_generic + overlap
 
     if exact:
         return {

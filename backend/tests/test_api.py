@@ -183,34 +183,128 @@ def test_evaluate_rejects_invalid_body(Session, pipeline_calls, body):
     assert pipeline_calls == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "routes.py (protected) gap: EvaluateRequest.weights is an unvalidated "
-    "dict — negative weights are accepted and silently distort the composite."
-))
-def test_evaluate_rejects_negative_weights(Session):
+VALID_WEIGHTS = {"financial": 0.30, "compliance": 0.25, "operational": 0.20,
+                 "reputation": 0.10, "strategic": 0.15}
+
+
+def post_weights(weights):
+    return call("POST", "/api/v1/evaluate", json={**EVALUATE_BODY, "weights": weights})
+
+
+def test_evaluate_accepts_weights_with_float_rounding(Session, pipeline_calls):
+    # 0.30 + 0.25 + 0.20 + 0.10 + 0.15 == 1.0000000000000002 in floating point
+    assert post_weights(VALID_WEIGHTS).status_code == 202
+    assert post_weights({**VALID_WEIGHTS, "financial": 0.3004, "strategic": 0.15}).status_code == 202
+
+
+def test_evaluate_accepts_zero_weight_for_an_agent(Session):
+    weights = {"financial": 0.5, "compliance": 0.5, "operational": 0.0,
+               "reputation": 0.0, "strategic": 0.0}
+    assert post_weights(weights).status_code == 202
+
+
+def test_evaluate_rejects_negative_weights(Session, pipeline_calls):
     weights = {"financial": -1.0, "compliance": 1.0, "operational": 0.5,
                "reputation": 0.25, "strategic": 0.25}
-    assert call("POST", "/api/v1/evaluate", json={**EVALUATE_BODY, "weights": weights}).status_code == 422
+    resp = post_weights(weights)
+    assert resp.status_code == 422
+    assert "finite and >= 0" in resp.text
+    assert pipeline_calls == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "routes.py (protected) gap: weights are not required to sum to 1, so "
-    "composite scores from different requests are not on the same scale."
-))
-def test_evaluate_rejects_weights_not_summing_to_one(Session):
-    weights = {"financial": 0.9, "compliance": 0.9, "operational": 0.9,
-               "reputation": 0.9, "strategic": 0.9}
-    assert call("POST", "/api/v1/evaluate", json={**EVALUATE_BODY, "weights": weights}).status_code == 422
+@pytest.mark.parametrize("scale", [0.9, 5.0, 0.0])
+def test_evaluate_rejects_weights_not_summing_to_one(Session, scale):
+    weights = {k: scale for k in VALID_WEIGHTS}
+    resp = post_weights(weights)
+    assert resp.status_code == 422
+    assert "must sum to 1.0" in resp.text
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "routes.py (protected) gap: unknown weight keys are accepted and "
-    "ignored, so a typo like 'finance' silently falls back to the default."
-))
 def test_evaluate_rejects_unknown_weight_keys(Session):
     weights = {"finance": 0.3, "compliance": 0.25, "operational": 0.2,
                "reputation": 0.1, "strategic": 0.15}
-    assert call("POST", "/api/v1/evaluate", json={**EVALUATE_BODY, "weights": weights}).status_code == 422
+    resp = post_weights(weights)
+    assert resp.status_code == 422
+    assert "finance" in resp.text and "financial" in resp.text
+
+
+def test_evaluate_rejects_missing_weight_keys(Session):
+    weights = {"financial": 0.5, "compliance": 0.5}
+    resp = post_weights(weights)
+    assert resp.status_code == 422
+    assert "missing" in resp.text
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+def test_evaluate_rejects_non_finite_weights_with_clean_422(Session, pipeline_calls, bad):
+    # Not valid JSON, but Python's parser accepts it. The error body echoes
+    # the input, so it must stay serialisable (was a 500 before the handler).
+    import json as _json
+    body = ('{"vendor_name": "Okta", "client_profile": %s, "weights": {"financial": %s, '
+            '"compliance": 0.25, "operational": 0.2, "reputation": 0.1, "strategic": 0.15}}')
+    resp = call("POST", "/api/v1/evaluate", content=body % (_json.dumps(CLIENT_PROFILE), bad),
+                headers={"Content-Type": "application/json"})
+    assert resp.status_code == 422
+    assert "finite and >= 0" in resp.text
+    assert pipeline_calls == []
+
+
+def validation_errors(**body):
+    """A real RequestValidationError built from the request model."""
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError
+    try:
+        routes.EvaluateRequest.model_validate(body)
+    except ValidationError as e:
+        return RequestValidationError(e.errors())
+    raise AssertionError("body unexpectedly valid")
+
+
+FINITE_INVALID_BODIES = [
+    {"vendor_name": "Okta"},                                                  # missing field
+    {**EVALUATE_BODY, "client_profile": {**CLIENT_PROFILE, "contract_years": "x"}},  # bad type
+    {**EVALUATE_BODY, "weights": {"finance": 1.0}},                           # weights validator
+    {**EVALUATE_BODY, "weights": {k: -0.2 for k in VALID_WEIGHTS}},
+]
+
+
+@pytest.mark.parametrize("body", FINITE_INVALID_BODIES)
+def test_422_handler_is_byte_identical_to_fastapi_default_for_finite_input(body):
+    from fastapi.exception_handlers import request_validation_exception_handler as default
+    exc = validation_errors(**body)
+    ours = asyncio.run(main_api.validation_exception_handler(None, exc))
+    theirs = asyncio.run(default(None, exc))
+    assert ours.status_code == theirs.status_code == 422
+    assert ours.body == theirs.body
+
+
+def test_422_handler_only_differs_for_non_finite_numbers():
+    from fastapi.exception_handlers import request_validation_exception_handler as default
+    exc = validation_errors(**{**EVALUATE_BODY, "weights": {**VALID_WEIGHTS, "financial": float("nan")}})
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        asyncio.run(default(None, exc))          # FastAPI's default can't render it
+    ours = asyncio.run(main_api.validation_exception_handler(None, exc))
+    assert ours.status_code == 422 and b'"nan"' in ours.body
+
+
+def test_json_safe_leaves_everything_but_non_finite_floats_alone():
+    value = {"a": [1, 2.5, "NaN", None, True, {"b": -0.0}], "c": "inf"}
+    assert main_api._json_safe(value) == value
+    assert main_api._json_safe({"x": [float("inf"), float("-inf"), float("nan")]}) == \
+        {"x": ["inf", "-inf", "nan"]}
+
+
+def test_only_request_validation_errors_use_the_custom_handler():
+    from fastapi.exceptions import RequestValidationError
+    custom = {exc for exc, handler in app.exception_handlers.items()
+              if handler is main_api.validation_exception_handler}
+    assert custom == {RequestValidationError}
+
+
+def test_standard_validation_errors_keep_fastapi_shape(Session):
+    detail = call("POST", "/api/v1/evaluate", json={"vendor_name": "Okta"}).json()["detail"]
+    assert detail[0]["loc"] == ["body", "client_profile"]
+    assert detail[0]["type"] == "missing"
 
 
 # ── GET /jobs/{id} and /jobs ──────────────────────────────
@@ -248,14 +342,11 @@ def test_list_jobs_newest_first_with_limit(Session):
     assert all("result" not in j for j in jobs)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "routes.py (protected) gap: `limit` has no upper bound on /jobs and "
-    "/evaluations, so one request can load the whole table (including every "
-    "stored result JSON)."
-))
 @pytest.mark.parametrize("path", ["/api/v1/jobs", "/api/v1/evaluations"])
-def test_list_endpoints_bound_limit(Session, path):
-    assert call("GET", path, params={"limit": 1_000_000}).status_code == 422
+@pytest.mark.parametrize("limit, status", [(1_000_000, 422), (101, 422), (0, 422),
+                                           (-5, 422), (100, 200), (1, 200)])
+def test_list_endpoints_bound_limit(Session, path, limit, status):
+    assert call("GET", path, params={"limit": limit}).status_code == status
 
 
 # ── /evaluations ──────────────────────────────────────────

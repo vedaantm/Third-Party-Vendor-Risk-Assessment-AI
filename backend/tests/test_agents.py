@@ -303,6 +303,14 @@ def test_compliance_prompt_shows_ofac_status(status, expected_text, expected_jso
     assert f'{expected_json}, "certifications_valid"' in prompt
 
 
+def test_compliance_prompt_possible_match_wording_covers_exact_generic_matches():
+    line = next(l for l in compliance_prompt(ofac_status="possible_match").splitlines()
+                if l.startswith("OFAC screening:"))
+    assert "overlaps OFAC SDN entries" in line
+    assert "too short or generic to confirm" in line
+    assert "Do NOT apply the automatic override" in line
+
+
 def test_compliance_prompt_missing_ofac_status_is_not_clear():
     prompt = ComplianceAgent()._build_user_prompt("TestCo", {"industry": "Software"}, "Verdict: fine")
     assert "OFAC screening: NOT COMPLETED" in prompt
@@ -341,6 +349,62 @@ def test_financial_prompt_includes_only_key_numeric_fields(fake_llm):
     prompt = fake_llm.scoring_messages[1].content
     assert '"net_margin": 13.9' in prompt
     assert "some_internal_blob" not in prompt
+
+
+# ── Financial agent: missing credit rating ────────────────
+# The Yahoo credit scrape was removed in commit 1, so credit_rating is now
+# usually absent. It must reach the agent as "not provided" — never as a
+# null, "N/A" or invented value.
+
+def fake_yfinance(info):
+    ticker = SimpleNamespace(info=info, financials=None)
+    return SimpleNamespace(Ticker=lambda symbol: ticker)
+
+
+@pytest.mark.parametrize("info_extra", [{}, {"creditRating": None}])
+def test_scraper_drops_missing_credit_rating(monkeypatch, info_extra):
+    from app.services import scraper
+    info = {"longName": "Okta, Inc.", "industry": "Software—Application",
+            "currentRatio": 1.8, "profitMargins": 0.139, **info_extra}
+    monkeypatch.setattr(scraper, "_find_ticker", lambda name: "OKTA")
+    monkeypatch.setattr(scraper, "yf", fake_yfinance(info))
+    data = scraper._scrape_yfinance("Okta")
+    assert "credit_rating" not in data
+    assert data["current_ratio"] == 1.8 and data["net_margin"] == 13.9
+
+
+def test_scraper_keeps_real_credit_rating(monkeypatch):
+    from app.services import scraper
+    info = {"longName": "Okta, Inc.", "creditRating": "BBB+"}
+    monkeypatch.setattr(scraper, "_find_ticker", lambda name: "OKTA")
+    monkeypatch.setattr(scraper, "yf", fake_yfinance(info))
+    assert scraper._scrape_yfinance("Okta")["credit_rating"] == "BBB+"
+
+
+def test_financial_agent_without_credit_rating(fake_llm):
+    state = make_state()
+    assert "credit_rating" not in state["financial_data"]
+    result = asyncio.run(run_financial_agent(state))
+    assert 0 <= result["score"] <= 100
+    reasoning_prompt = fake_llm.calls[0][0].content
+    scoring_prompt = fake_llm.scoring_messages[1].content
+    assert "credit_rating" not in reasoning_prompt
+    assert "credit_rating" not in scoring_prompt
+    assert "N/A" not in scoring_prompt
+
+
+def test_financial_scoring_prompt_omits_explicit_none_credit_rating(fake_llm):
+    state = make_state()
+    state["financial_data"]["credit_rating"] = None
+    asyncio.run(run_financial_agent(state))
+    assert "credit_rating" not in fake_llm.scoring_messages[1].content
+
+
+def test_financial_scoring_prompt_includes_real_credit_rating(fake_llm):
+    state = make_state()
+    state["financial_data"]["credit_rating"] = "A+"
+    asyncio.run(run_financial_agent(state))
+    assert '"credit_rating": "A+"' in fake_llm.scoring_messages[1].content
 
 
 # ── Live: real Groq calls ─────────────────────────────────
