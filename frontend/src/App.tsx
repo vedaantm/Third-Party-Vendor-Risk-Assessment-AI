@@ -1,6 +1,8 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import EvaluatePage from "./pages/EvaluatePage";
+import HistoryPage from "./pages/HistoryPage";
 import JobPage from "./pages/JobPage";
+import ReportPage from "./pages/ReportPage";
 
 function navClass({ isActive }: { isActive: boolean }) {
   return isActive
@@ -28,6 +30,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<EvaluatePage />} />
           <Route path="/jobs/:jobId" element={<JobPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/evaluations/:evaluationId/report" element={<ReportPage />} />
           <Route path="*" element={<p className="text-slate-600">Page not found.</p>} />
         </Routes>
       </main>
