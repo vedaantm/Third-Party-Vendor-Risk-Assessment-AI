@@ -720,3 +720,17 @@ def test_cors_allows_default_frontend_origin():
 def test_cors_rejects_other_origins():
     resp = preflight("https://evil.example.com")
     assert "access-control-allow-origin" not in resp.headers
+
+
+# ── truncated_agents in the job result ────────────────────
+
+def test_pipeline_result_lists_truncated_agents(pipeline):
+    pipeline.agents["financial"] = agent_output(truncated=True,
+        red_flags=["Agent output was truncated — red flags may be incomplete"])
+    job = pipeline.run()
+    assert job.result["truncated_agents"] == ["financial"]
+    assert job.result["recommendation"] == "REVIEW"
+
+
+def test_pipeline_result_has_empty_truncated_agents_when_none(pipeline):
+    assert pipeline.run().result["truncated_agents"] == []
