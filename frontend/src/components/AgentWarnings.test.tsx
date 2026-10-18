@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { truncatedAgents } from "../lib/agents";
+import { truncatedAgentsFromRedFlags } from "../lib/agents";
 import AgentWarnings from "./AgentWarnings";
 
 test("renders nothing when every analysis completed in full", () => {
@@ -34,33 +34,19 @@ test("both warnings show together", () => {
   expect(screen.getAllByRole("alert")).toHaveLength(2);
 });
 
-describe("truncatedAgents", () => {
-  test("uses truncated_agents when the backend provides it", () => {
-    expect(truncatedAgents({ truncated_agents: ["strategic", "financial"], red_flags: [] })).toEqual([
-      "financial",
-      "strategic",
-    ]);
-  });
-
-  test("falls back to the meta-agent's truncation red flag", () => {
+describe("truncatedAgentsFromRedFlags (saved reports and pre-field job results)", () => {
+  test("reads the meta-agent's truncation red flag", () => {
     expect(
-      truncatedAgents({
-        red_flags: [
-          "[FINANCIAL] Agent output was truncated — red flags may be incomplete",
-          "[REPUTATION] Data breach reported [Reuters]",
-          "[COMPLIANCE] Agent output was truncated — red flags may be incomplete",
-        ],
-      }),
+      truncatedAgentsFromRedFlags([
+        "[FINANCIAL] Agent output was truncated — red flags may be incomplete",
+        "[REPUTATION] Data breach reported [Reuters]",
+        "[COMPLIANCE] Agent output was truncated — red flags may be incomplete",
+      ]),
     ).toEqual(["compliance", "financial"]);
   });
 
-  test("an explicit empty list wins over red flags", () => {
-    expect(
-      truncatedAgents({ truncated_agents: [], red_flags: ["[FINANCIAL] Agent output was truncated — x"] }),
-    ).toEqual([]);
-  });
-
   test("no flags, no truncation", () => {
-    expect(truncatedAgents({ red_flags: null })).toEqual([]);
+    expect(truncatedAgentsFromRedFlags(null)).toEqual([]);
+    expect(truncatedAgentsFromRedFlags(["[REPUTATION] Data breach reported"])).toEqual([]);
   });
 });

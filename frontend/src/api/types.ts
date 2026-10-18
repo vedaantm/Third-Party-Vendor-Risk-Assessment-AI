@@ -89,9 +89,8 @@ export interface EvaluationResult {
   ofac_matches: string[];
   unavailable_agents: string[];
   /**
-   * Computed by the meta-agent but NOT currently included in the job
-   * result by routes.py — optional so the UI works either way (see
-   * lib/agents.ts, which falls back to the truncation red flag).
+   * Agents whose output was truncated (forces REVIEW). Absent only on job
+   * results stored before routes.py started returning it.
    */
   truncated_agents?: string[];
   agent_scores: Record<AgentKey, number | null>;
