@@ -44,6 +44,7 @@ def _fresh_test_chroma_dir() -> str:
 _TEST_CHROMA = _fresh_test_chroma_dir()
 os.environ["CHROMA_PATH"] = _TEST_CHROMA
 os.environ.pop("CERT_CACHE_VALID_AFTER", None)
+os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"   # nothing listens on port 1
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -105,6 +106,9 @@ def _redis_down_by_default(monkeypatch):
     from app.services import cache
     monkeypatch.setattr(cache, "_redis_client", None)
     monkeypatch.setattr(cache, "_redis_available", False)
+    # Never reconnect on its own — REDIS_URL from backend/.env may point at a
+    # real local Redis, which the loopback-only network guard would allow.
+    monkeypatch.setattr(cache, "_redis_retry_at", float("inf"))
 
 
 def install_fake_redis(monkeypatch, client=None):

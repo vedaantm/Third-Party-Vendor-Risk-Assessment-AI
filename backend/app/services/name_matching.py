@@ -67,17 +67,20 @@ def names_exact(a: str, b: str) -> bool:
 
 def names_match(query: str, candidate: str) -> bool:
     """
-    Registry-style match: the core names are equal, or one is a whole-token
-    prefix of the other.
+    Registry-style match: the core names are equal, or the vendor's name
+    (`query`) is a whole-token prefix of the registry name — registries list
+    product/package names that extend the company name.
         "Salesforce"         ~ "Salesforce Government Cloud"   (package name)
-        "Palo Alto Networks" ~ "Palo Alto"                      (seed entry)
+        "Okta, Inc."         ~ "Okta"
+    A vendor name that merely contains a registry name is NOT a match:
+        "Box Hill Logistics" ≁ "Box Inc."
         "Tata Motors"        ≁ "Tata Consultancy Services"
         "Acme Data Systems"  ≁ "Data Systems Inc"
     """
     tq, tc = core_tokens(query), core_tokens(candidate)
     if not tq or not tc:
         return False
-    return _is_prefix(tq, tc) or _is_prefix(tc, tq)
+    return _is_prefix(tq, tc)
 
 
 def names_overlap(a: str, b: str) -> bool:

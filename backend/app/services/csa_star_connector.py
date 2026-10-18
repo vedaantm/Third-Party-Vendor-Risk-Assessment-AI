@@ -42,7 +42,7 @@ SEED_DATA: list[dict] = [
     {"name": "Dropbox",     "level": 2, "services": ["Dropbox Business"]},
     {"name": "Workday",     "level": 2, "services": ["Workday HCM"]},
     {"name": "CrowdStrike", "level": 2, "services": ["Falcon Platform"]},
-    {"name": "Palo Alto",   "level": 2, "services": ["Prisma Cloud"]},
+    {"name": "Palo Alto Networks", "level": 2, "services": ["Prisma Cloud"]},
     {"name": "Okta",        "level": 2, "services": ["Okta Identity Cloud"]},
     {"name": "Zscaler",     "level": 2, "services": ["Zscaler Internet Access"]},
     # Level 1 = self-assessment publicly filed with CSA (CORROBORATED)

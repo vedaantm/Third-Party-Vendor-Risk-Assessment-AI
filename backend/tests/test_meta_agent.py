@@ -272,9 +272,10 @@ def test_hard_rejects_still_apply_when_agents_are_unavailable():
 
 # ── Truncated agent output ────────────────────────────────
 # A truncated Step 2 reply is salvaged by parse_agent_output only when both
-# score and confidence survived. The meta-agent then treats it as an
-# available agent: full weight, its confidence counts, and the truncation
-# red flag is surfaced.
+# score and confidence survived. The meta-agent counts it at full weight and
+# surfaces the truncation red flag, but because red flags after the cut-off
+# may be lost it forces REVIEW: never auto-approve, never auto-reject on
+# score. Only an OFAC match or a hard dealbreaker can still reject.
 
 TRUNCATED_RAW = (
     '{"score": 90, "confidence": 0.97, '
@@ -301,15 +302,52 @@ def test_truncated_output_red_flag_is_surfaced_in_result_and_explanation():
     assert "truncated" in result["final_explanation"]
 
 
-def test_truncated_output_does_not_currently_block_auto_approval():
-    """
-    Documents CURRENT behaviour, flagged for review: the truncated reply lost
-    whatever followed the cut-off (here, a red flag about D/E), yet with high
-    scores and confidence the vendor is still auto-approved. The truncation
-    red flag does not gate the decision.
-    """
-    result = run(make_state(financial=truncated_output()))
-    assert result["final_recommendation"] == "APPROVE"
+@pytest.mark.parametrize("agent", AGENTS)
+def test_truncated_output_forces_review_never_auto_approves(agent):
+    # The cut-off reply lost a red flag about D/E; all scores are high and
+    # confident, so without the gate this vendor would be auto-approved.
+    perfect = output(score=100.0, confidence=1.0)
+    state = make_state(**{name: perfect for name in AGENTS})
+    state[f"{agent}_output"] = truncated_output()
+    result = run(state)
+    assert result["final_recommendation"] == "REVIEW"
+    assert result["truncated_agents"] == [agent]
+    assert "truncated" in result["decision_reason"]
+
+
+def test_truncated_output_with_low_scores_reviews_instead_of_rejecting():
+    low = output(score=20.0, confidence=0.9)
+    truncated_low = parse_agent_output('{"score": 20, "confidence": 0.9, "explanation": "Weak liquidity ratios')
+    state = make_state(financial=truncated_low, compliance=low, operational=low,
+                       reputation=low, strategic=low)
+    assert run(state)["final_recommendation"] == "REVIEW"
+
+
+def test_truncated_output_does_not_override_hard_rejects():
+    assert run(make_state(ofac_status="match", financial=truncated_output()))["final_recommendation"] == "REJECT"
+    state = make_state(
+        financial=truncated_output(),
+        strategic=output(dealbreakers_triggered=["criminal investigation"]),
+    )
+    assert run(state)["final_recommendation"] == "REJECT"
+
+
+def test_multiple_truncated_agents_are_all_listed():
+    state = make_state(financial=truncated_output(), reputation=truncated_output())
+    result = run(state)
+    assert result["truncated_agents"] == ["financial", "reputation"]
+    assert "Agents Truncated: financial, reputation" in result["final_explanation"]
+
+
+def test_untruncated_outputs_report_no_truncation():
+    result = run(make_state())
+    assert result["truncated_agents"] == []
+    assert "Agents Truncated: none" in result["final_explanation"]
+
+
+def test_truncated_agents_get_an_action_item():
+    text = _get_action_items("REVIEW", 80, 0.97, [], "clear", [], ["financial"])
+    assert "truncated analysis (financial)" in text
 
 
 def test_truncated_output_without_confidence_becomes_unavailable_agent():

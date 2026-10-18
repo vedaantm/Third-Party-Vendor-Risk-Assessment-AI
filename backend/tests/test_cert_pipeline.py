@@ -253,7 +253,8 @@ def test_fedramp_data_loaded_once(monkeypatch):
 
 @pytest.mark.parametrize("vendor, tier", [
     ("Okta", "VERIFIED_REGISTRY"),                      # Level 2
-    ("Palo Alto Networks", "VERIFIED_REGISTRY"),        # seed entry "Palo Alto"
+    ("Palo Alto Networks", "VERIFIED_REGISTRY"),
+    ("Palo Alto Networks, Inc.", "VERIFIED_REGISTRY"),
     ("Tata Consultancy Services Limited", "VERIFIED_REGISTRY"),
     ("Infosys", "CORROBORATED"),                        # Level 1
 ])
@@ -263,7 +264,8 @@ def test_csa_star_seed_tiers(vendor, tier):
     assert "demo dataset" in result["csa_star_evidence"]
 
 
-@pytest.mark.parametrize("vendor", ["Tata Motors", "Acme Cloud Services", "Boxwood Partners"])
+@pytest.mark.parametrize("vendor", ["Tata Motors", "Acme Cloud Services", "Boxwood Partners",
+                                    "Box Hill Logistics", "Zoom Video Labs"])
 def test_csa_star_seed_no_false_positives(vendor):
     assert csa_star_connector.check_csa_star(vendor)["csa_star_found"] is False
 
@@ -520,25 +522,25 @@ def test_web_fallback_with_no_fetchable_pages(web_pipeline, monkeypatch):
     ("Please try again in 1.35s.", 1.35),
     ("Please try again in 7m12.5s.", 432.5),
     ("Please try again in 2h3m4s.", 7384.0),
+    ("Please try again in 3h2m.", 10920.0),
     ("Please try again in 450ms.", 0.45),
+    ("Please Try Again In 2S.", 2.0),
     ("Rate limit reached.", 10.0),
 ])
 def test_parse_wait_seconds(message, seconds):
     assert cea._parse_wait_seconds(message) == pytest.approx(seconds)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "cert_extraction_agent.py (protected) gap: _parse_wait_seconds searches "
-    "the whole error string, so digits followed by h/m/s anywhere — e.g. in "
-    "Groq's organization id — are read as hours/minutes. A 7.5s wait is "
-    "parsed as over an hour and the batch is dropped as a 'daily limit'. "
-    "Desired: parse only the 'try again in …' duration."
-))
 def test_parse_wait_seconds_ignores_digits_outside_the_retry_phrase():
     message = ("Rate limit reached for model `openai/gpt-oss-20b` in organization "
                "`org_01hx4m2s9q` on tokens per minute (TPM): Limit 8000, Used 7417, "
                "Requested 1584. Please try again in 7.5075s.")
     assert cea._parse_wait_seconds(message) == pytest.approx(7.5075)
+
+
+def test_parse_wait_seconds_without_retry_phrase_uses_default():
+    # Digits followed by h/m/s elsewhere must not be read as a duration
+    assert cea._parse_wait_seconds("org_01hx4m2s9q: 429 Too Many Requests 30s window") == 10.0
 
 
 @pytest.mark.parametrize("raw", [
@@ -550,18 +552,17 @@ def test_parse_llm_output(raw):
     assert cea._parse_llm_output(raw)["certifications_found"] == ["ISO27001"]
 
 
-def test_parse_llm_output_invalid_returns_empty():
-    assert cea._parse_llm_output("no json here") == cea._empty_result()
+@pytest.mark.parametrize("raw", ["no json here", "{not: valid}", "[1, 2]", "", '"just a string"'])
+def test_parse_llm_output_invalid_returns_empty(raw):
+    assert cea._parse_llm_output(raw) == cea._empty_result()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "cert_extraction_agent.py (protected) gap: _parse_llm_output only strips "
-    "a fence at the very start, so any preamble before the JSON makes the "
-    "whole batch parse as empty and its certifications are silently lost. "
-    "Desired: locate the JSON object as base_agent.parse_agent_output does."
-))
-def test_parse_llm_output_with_preamble():
-    raw = 'Here are the findings:\n```json\n{"certifications_found": ["ISO27001"]}\n```'
+@pytest.mark.parametrize("raw", [
+    'Here are the findings:\n```json\n{"certifications_found": ["ISO27001"]}\n```',
+    'Findings: {"certifications_found": ["ISO27001"]} — end of report',
+    '```json\n{"certifications_found": ["ISO27001"]}\n```\nLet me know if you need more.',
+])
+def test_parse_llm_output_with_surrounding_text(raw):
     assert cea._parse_llm_output(raw)["certifications_found"] == ["ISO27001"]
 
 
@@ -685,12 +686,15 @@ def test_core_tokens(name, tokens):
 
 @pytest.mark.parametrize("query, candidate", [
     ("Microsoft", "MICROSOFT CORP"),
-    ("Salesforce", "Salesforce Government Cloud"),
-    ("Palo Alto Networks", "Palo Alto"),
+    ("Salesforce", "Salesforce Government Cloud"),      # registry name extends the vendor's
+    ("Palo Alto", "Palo Alto Networks Inc"),
+    ("Palo Alto Networks", "Palo Alto Networks"),
     ("Tata Consultancy Services Limited", "Tata Consultancy Services"),
     ("Amazon", "AMAZON COM INC"),
     ("SAP SE", "SAP"),
+    ("SAP SE", "SAP National Security Services Inc. (SAP NS2)"),
     ("CrowdStrike", "CrowdStrike Holdings, Inc."),
+    ("Okta, Inc.", "Okta"),
 ])
 def test_names_match_accepts_real_variants(query, candidate):
     assert names_match(query, candidate)
@@ -709,10 +713,14 @@ def test_names_match_rejects_shared_word_false_positives(query, candidate):
     assert not names_match(query, candidate)
 
 
-def test_names_match_known_limitation_single_word_prefix():
-    """Documents a known limitation: a vendor whose first word is a whole
-    registry name still matches it."""
-    assert names_match("Box Hill Logistics", "Box Inc.")
+@pytest.mark.parametrize("query, candidate", [
+    ("Box Hill Logistics", "Box Inc."),
+    ("Palo Alto Networks", "Palo Alto"),
+    ("Amazon Web Services", "Amazon"),
+    ("Oracle Health Partners", "ORACLE CORP"),
+])
+def test_vendor_name_merely_containing_registry_name_is_not_a_match(query, candidate):
+    assert not names_match(query, candidate)
 
 
 def test_names_exact_and_overlap():

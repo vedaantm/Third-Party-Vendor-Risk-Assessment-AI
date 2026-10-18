@@ -27,6 +27,8 @@ def real_sample():
 # Minimal synthetic rows for edge cases the real sample doesn't cover
 SYNTHETIC_SDN = """\
 535,"CIMEX",-0- ,"CUBA",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0-
+536,"CIMEX IBERICA",-0- ,"CUBA",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0-
+700,"GLOBAL TRADING COMPANY LLC",-0- ,"SDGT",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0-
 900,"OCEAN STAR",vessel ,"IRAN",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0-
 901,"SKY TRADER",aircraft ,"IRAN",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0-
 """
@@ -48,7 +50,7 @@ def test_parse_real_sample(real_sample):
 
 
 def test_parse_skips_vessels_and_aircraft(synthetic):
-    assert [e["name"] for e in synthetic] == ["CIMEX"]
+    assert [e["name"] for e in synthetic] == ["CIMEX", "CIMEX IBERICA", "GLOBAL TRADING COMPANY LLC"]
 
 
 def test_parse_ignores_aliases_for_unknown_or_skipped_entities():
@@ -59,15 +61,14 @@ def test_parse_ignores_aliases_for_unknown_or_skipped_entities():
 # ── Known positives / negatives (real SDN rows) ───────────
 
 @pytest.mark.parametrize("vendor, sdn_id", [
-    ("Rosneft", "17022"),                       # via alias "ROSNEFT"
     ("Rosneft Oil Company", "17022"),           # via alias "ROSNEFT OIL COMPANY"
     ("Banco Nacional de Cuba", "306"),
     ("Banco Nacional de Cuba, S.A.", "306"),    # legal suffix ignored
     ("National Bank of Cuba", "306"),           # English alias
     ("Sberbank of Russia", "17018"),            # via alias "SBERBANK OF RUSSIA"
-    ("Atlas Holding SAL", "28527"),
+    ("Atlas Holding SAL", "28527"),             # full alias, includes a non-generic word
 ])
-def test_known_positive_is_match(real_sample, vendor, sdn_id):
+def test_specific_known_positive_is_match(real_sample, vendor, sdn_id):
     result = screen_name(vendor, real_sample)
     assert result["ofac_status"] == "match"
     assert result["ofac_clear"] is False
@@ -88,14 +89,43 @@ def test_partial_name_overlap_is_possible_match(real_sample, vendor, sdn_id):
     assert any(f"SDN #{sdn_id}" in m for m in result["ofac_matches"])
 
 
-def test_generic_single_word_exact_match_is_treated_as_match(real_sample):
-    """
-    Documents CURRENT behaviour, flagged as a policy question: "Atlas"
-    exactly matches "ATLAS HOLDING" once the legal suffix is removed, so a
-    legitimate vendor named Atlas is auto-rejected. The reason text names
-    the SDN entry so a reviewer can override.
-    """
-    assert screen_name("Atlas", real_sample)["ofac_status"] == "match"
+@pytest.mark.parametrize("vendor, sdn_id", [
+    ("Atlas", "28527"),                 # = "ATLAS HOLDING" once the suffix is removed
+    ("Rosneft", "17022"),               # single word, = alias "ROSNEFT"
+    ("Delta Parts Supply", "29384"),    # every word generic, = alias "DELTA PARTS SUPPLY"
+])
+def test_single_word_or_generic_exact_match_is_possible_match(real_sample, vendor, sdn_id):
+    result = screen_name(vendor, real_sample)
+    assert result["ofac_status"] == "possible_match"
+    assert result["ofac_clear"] is None
+    exact = [m for m in result["ofac_matches"] if f"SDN #{sdn_id}" in m]
+    assert exact and "too short or generic" in exact[0]
+
+
+def test_generic_multi_word_exact_match_is_possible_match(synthetic):
+    result = screen_name("Global Trading Company", synthetic)
+    assert result["ofac_status"] == "possible_match"
+    assert "too short or generic" in result["ofac_matches"][0]
+
+
+def test_specific_multi_word_exact_match_is_match(synthetic):
+    assert screen_name("Cimex Iberica", synthetic)["ofac_status"] == "match"
+
+
+def test_exact_generic_hits_are_reported_before_partial_overlaps(synthetic):
+    # "Cimex" exactly equals CIMEX (generic: single word) and overlaps CIMEX IBERICA
+    matches = screen_name("Cimex", synthetic)["ofac_matches"]
+    assert "too short or generic" in matches[0] and "SDN #535" in matches[0]
+    assert "SDN #536" in matches[1]
+
+
+@pytest.mark.parametrize("tokens, specific", [
+    (["atlas"], False), (["rosneft"], False), (["global", "trading"], False),
+    (["delta", "parts", "supply"], False), (["national", "bank", "of", "cuba"], True),
+    (["rosneft", "oil"], True), (["cimex", "iberica"], True),
+])
+def test_name_specificity(tokens, specific):
+    assert ofac_screening._name_is_specific(tokens) is specific
 
 
 @pytest.mark.parametrize("vendor", [
@@ -112,8 +142,8 @@ def test_known_negative_is_clear(real_sample, vendor):
 
 def test_exact_alias_outranks_partial_primary_name(real_sample):
     # Primary "OPEN JOINT-STOCK COMPANY ROSNEFT OIL COMPANY" only overlaps;
-    # alias "ROSNEFT" is exact — the entity must be reported as a match
-    assert screen_name("Rosneft", real_sample)["ofac_status"] == "match"
+    # alias "ROSNEFT OIL COMPANY" is exact — the entity must be a match
+    assert screen_name("Rosneft Oil Company", real_sample)["ofac_status"] == "match"
 
 
 # ── Edge cases ────────────────────────────────────────────
@@ -138,8 +168,8 @@ def test_matches_are_capped(synthetic):
 
 
 def test_unindexed_entries_are_indexed_on_demand():
-    entry = {"ent_num": "1", "name": "CIMEX", "program": "CUBA", "aliases": []}
-    assert screen_name("Cimex", [entry])["ofac_status"] == "match"
+    entry = {"ent_num": "1", "name": "CIMEX IBERICA", "program": "CUBA", "aliases": []}
+    assert screen_name("Cimex Iberica", [entry])["ofac_status"] == "match"
 
 
 def test_missing_list_is_unavailable_not_clear():
@@ -180,7 +210,7 @@ def test_check_ofac_downloads_both_files_once_and_caches(monkeypatch, fresh_cach
         return FakeResponse(sdn if url == ofac_screening.SDN_URL else alt)
 
     monkeypatch.setattr(ofac_screening.requests, "get", fake_get)
-    assert check_ofac("Rosneft")["ofac_status"] == "match"
+    assert check_ofac("Rosneft Oil Company")["ofac_status"] == "match"
     assert check_ofac("Microsoft")["ofac_status"] == "clear"
     assert calls == [ofac_screening.SDN_URL, ofac_screening.ALT_URL]
 
@@ -195,7 +225,8 @@ def test_check_ofac_refreshes_after_ttl(monkeypatch, fresh_cache, real_sample):
     monkeypatch.setattr(ofac_screening, "_sdn_cache", real_sample)
     monkeypatch.setattr(ofac_screening, "_sdn_loaded_at", 0.0)   # long expired
     monkeypatch.setattr(ofac_screening.requests, "get", fake_get)
-    assert check_ofac("Cimex")["ofac_status"] == "match"           # new list in use
+    # CIMEX IBERICA exists only in the new list, so a match proves it's in use
+    assert check_ofac("Cimex Iberica")["ofac_status"] == "match"
     assert len(calls) == 2
 
 
@@ -229,14 +260,16 @@ def test_refresh_failure_reuses_previous_list(monkeypatch, real_sample):
     monkeypatch.setattr(ofac_screening, "_sdn_cache", real_sample)
     monkeypatch.setattr(ofac_screening, "_sdn_loaded_at", 0.0)   # TTL expired
     monkeypatch.setattr(ofac_screening.requests, "get", boom)
-    assert check_ofac("Rosneft")["ofac_status"] == "match"
+    assert check_ofac("Rosneft Oil Company")["ofac_status"] == "match"
 
 
 # ── Live: full current SDN list ───────────────────────────
 
 @pytest.mark.live
 @pytest.mark.parametrize("vendor, expected", [
-    ("Rosneft", "match"),
+    ("Rosneft Oil Company", "match"),
+    ("Rosneft", "possible_match"),
+    ("Atlas", "possible_match"),
     ("Banco Nacional de Cuba", "match"),
     ("Sberbank", "possible_match"),
     ("Gazprom", "possible_match"),

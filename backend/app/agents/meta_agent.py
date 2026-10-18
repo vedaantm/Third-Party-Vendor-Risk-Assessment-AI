@@ -218,6 +218,11 @@ async def run_meta_agent(state: VendorRiskState) -> dict:
     )
 
     unavailable_agents = sorted(missing)
+    # Salvaged from truncated JSON (see base_agent.parse_agent_output): the
+    # score and confidence are real, but anything after the cut-off — such
+    # as red flags — may be lost, so the evaluation can't be trusted to
+    # auto-approve or auto-reject.
+    truncated_agents = sorted(k for k in available if outputs[k].get("truncated"))
 
     # ── Recommendation logic ──────────────────────────────
     # Order matters: hard rejects first, then anything that blocks an
@@ -236,9 +241,10 @@ async def run_meta_agent(state: VendorRiskState) -> dict:
     elif ofac_status == "possible_match":
         recommendation = "REVIEW"
         decision_reason = (
-            "Possible OFAC sanctions match — the vendor name partially matches "
-            "SDN list entries. A compliance officer must confirm or clear the "
-            "match before any decision." + ofac_detail
+            "Possible OFAC sanctions match — the vendor name overlaps SDN list "
+            "entries, or matches one exactly but is too short or generic to "
+            "confirm on name alone. A compliance officer must confirm or clear "
+            "the match before any decision." + ofac_detail
         )
     elif ofac_status != "clear":
         recommendation = "REVIEW"
@@ -257,6 +263,13 @@ async def run_meta_agent(state: VendorRiskState) -> dict:
             f"{len(unavailable_agents)} of {len(outputs)} analysis agents did not "
             f"produce a usable result ({', '.join(unavailable_agents)}). "
             f"The evaluation is incomplete — route to a human reviewer."
+        )
+    elif truncated_agents:
+        recommendation = "REVIEW"
+        decision_reason = (
+            f"Output from {', '.join(truncated_agents)} was truncated — its "
+            f"score was recovered, but red flags and evidence after the "
+            f"cut-off may be missing. Route to a human reviewer."
         )
     elif composite < REJECT_BELOW_COMPOSITE and avg_conf >= REJECT_MIN_CONFIDENCE:
         recommendation = "REJECT"
@@ -320,12 +333,13 @@ SCORES:
 
   OFAC Screening  : {ofac_status}
   Agents Missing  : {', '.join(unavailable_agents) if unavailable_agents else 'none'}
+  Agents Truncated: {', '.join(truncated_agents) if truncated_agents else 'none'}
 
 RED FLAGS ({len(all_red_flags)} total):
 {chr(10).join(f'  ⚠ {f}' for f in all_red_flags) if all_red_flags else '  None detected'}
 
 WHAT YOU SHOULD DO:
-{_get_action_items(recommendation, composite, avg_conf, all_red_flags, ofac_status, unavailable_agents)}
+{_get_action_items(recommendation, composite, avg_conf, all_red_flags, ofac_status, unavailable_agents, truncated_agents)}
 """
 
     return {
@@ -338,6 +352,7 @@ WHAT YOU SHOULD DO:
         "dealbreaker_status":  dealbreaker_result["status"],
         "ofac_status":         ofac_status,
         "unavailable_agents":  unavailable_agents,
+        "truncated_agents":    truncated_agents,
         "all_red_flags":       all_red_flags,
         "final_explanation":   explanation.strip(),
         "pipeline_status":     "complete"
@@ -351,6 +366,7 @@ def _get_action_items(
     red_flags: list,
     ofac_status: str = "clear",
     unavailable_agents: list | None = None,
+    truncated_agents: list | None = None,
 ) -> str:
     actions = []
 
@@ -400,6 +416,13 @@ def _get_action_items(
         actions.append(
             f"{action_num}. Re-run the evaluation or manually assess the missing "
             f"areas: {', '.join(unavailable_agents)}."
+        )
+        action_num += 1
+
+    if truncated_agents:
+        actions.append(
+            f"{action_num}. Re-run or manually check the truncated analysis "
+            f"({', '.join(truncated_agents)}) — red flags may be missing."
         )
         action_num += 1
 

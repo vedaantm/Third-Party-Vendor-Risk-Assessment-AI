@@ -156,25 +156,37 @@ def test_successful_connection_is_reused(unchecked_redis):
     assert unchecked_redis.connects == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "cache.py gap: after one failed connection _redis_available is set to "
-    "False permanently, so Redis is never retried until the process "
-    "restarts. Desired: a later call reconnects once Redis is back (a "
-    "retry backoff is fine — adjust this test's timing if one is added)."
-))
-def test_redis_is_retried_after_it_comes_back(unchecked_redis):
+def test_redis_is_retried_after_backoff_once_it_comes_back(unchecked_redis, monkeypatch):
     async def body():
-        assert await cache._get_redis() is None
+        assert await cache._get_redis() is None              # Redis down
         unchecked_redis.up = True
+        within_backoff = await cache._get_redis()            # backoff respected
+        monkeypatch.setattr(cache, "_redis_retry_at", 0.0)   # backoff elapsed
+        after_backoff = await cache._get_redis()
+        return within_backoff, after_backoff
+    within_backoff, after_backoff = asyncio.run(body())
+    assert within_backoff is None
+    assert after_backoff is not None
+    assert cache._redis_available is True
+    assert unchecked_redis.connects == 2
+
+
+def test_failed_connection_schedules_retry_after_interval(unchecked_redis):
+    import time
+    before = time.monotonic()
+    asyncio.run(cache._get_redis())
+    assert cache._redis_retry_at >= before + cache.REDIS_RETRY_INTERVAL_SECONDS
+
+
+def test_redis_still_down_after_backoff_stays_down(unchecked_redis, monkeypatch):
+    async def body():
+        await cache._get_redis()
+        monkeypatch.setattr(cache, "_redis_retry_at", 0.0)
         return await cache._get_redis()
-    assert asyncio.run(body()) is not None
+    assert asyncio.run(body()) is None
+    assert unchecked_redis.connects == 2
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "cache.py gap: invalidate_cert_cache has no try/except around "
-    "client.delete, unlike every other Redis helper, so a Redis error "
-    "propagates to the caller. Desired: log and return, like the others."
-))
 def test_invalidate_does_not_raise_when_redis_errors(monkeypatch):
     async def body():
         install_fake_redis(monkeypatch, BrokenRedis())
