@@ -44,6 +44,7 @@ def _fresh_test_chroma_dir() -> str:
 _TEST_CHROMA = _fresh_test_chroma_dir()
 os.environ["CHROMA_PATH"] = _TEST_CHROMA
 os.environ.pop("CERT_CACHE_VALID_AFTER", None)
+os.environ.pop("CORS_ALLOW_ORIGINS", None)          # tests assert the default
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"   # nothing listens on port 1
 
 FIXTURES = Path(__file__).parent / "fixtures"
