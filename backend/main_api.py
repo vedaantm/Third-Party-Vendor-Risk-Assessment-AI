@@ -1,6 +1,7 @@
 # backend/main_api.py
 
 import math
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -33,10 +34,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS — allows any frontend or tool to call this API
+DEFAULT_CORS_ORIGINS = "http://localhost:5173"   # Vite dev server / docker frontend
+
+
+def _cors_origins(raw: str | None) -> list[str]:
+    """
+    CORS_ALLOW_ORIGINS: comma-separated origins allowed to call the API from
+    a browser, e.g. "http://localhost:5173,https://vendoriq.example.com".
+    Unset or blank → DEFAULT_CORS_ORIGINS. Trailing slashes are removed,
+    since browsers send the Origin header without one.
+    """
+    value = raw if raw and raw.strip() else DEFAULT_CORS_ORIGINS
+    return [o.strip().rstrip("/") for o in value.split(",") if o.strip()]
+
+
+# CORS — only the configured frontend origins (previously "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(os.environ.get("CORS_ALLOW_ORIGINS")),
     allow_methods=["*"],
     allow_headers=["*"],
 )
