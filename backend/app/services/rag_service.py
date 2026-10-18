@@ -40,30 +40,35 @@ _evaluations = _client.get_or_create_collection(
 def _seed_benchmarks():
     """
     Seeds ChromaDB with industry benchmark data and compliance
-    requirements. Only runs once — checks if already seeded.
-    These give agents useful context from the very first evaluation.
-    """
-    if _benchmarks.count() > 0:
-        return  # Already seeded
+    requirements. These give agents useful context from the very first
+    evaluation.
 
+    Upserts on every startup (ids are stable, so this is idempotent) — the
+    old "skip if already seeded" check meant edits to these texts never
+    reached an existing chroma_db volume.
+
+    These texts must stay consistent with INDUSTRY_CERT_MAP and the
+    compliance agent prompt: regulations (GDPR, CCPA, HIPAA, SOX) are never
+    described as certifications, and no text gives platform scores for named
+    vendors (that anchors the agents on a remembered number).
+    """
     print("  → RAG: Seeding industry benchmarks...")
 
     benchmark_docs = [
         {
             "id": "bench_it_services",
             "text": """IT Services & Software industry benchmarks:
-Financial: Average composite score 71/100. Typical current ratio 1.8-2.5.
+Financial: Typical current ratio 1.8-2.5.
 Debt-to-equity ratio acceptable up to 1.5. Net margin healthy above 12%.
 Revenue growth healthy above 8% YoY. EBITDA margin typically 18-25%.
 Interest coverage ratio should exceed 5x for investment grade.
-Red flags: D/E above 3, negative EBITDA, revenue decline two consecutive years.
-Top vendors in sector: Microsoft (score ~88), Salesforce (~79), SAP (~76).""",
+Red flags: D/E above 3, negative EBITDA, revenue decline two consecutive years.""",
             "metadata": {"industry": "IT Services", "type": "financial_benchmark"}
         },
         {
             "id": "bench_manufacturing",
             "text": """Manufacturing industry benchmarks:
-Financial: Average composite score 65/100. Current ratio 1.4-2.0.
+Financial: Current ratio 1.4-2.0.
 Debt-to-equity acceptable up to 2.0 due to capital intensity.
 Net margin healthy above 7%. Revenue growth healthy above 5% YoY.
 Gross margin typically 25-40%. Interest coverage should exceed 3x.
@@ -74,29 +79,30 @@ Supply chain risk elevated — operational resilience critical.""",
         {
             "id": "bench_financial_services",
             "text": """Financial Services industry benchmarks:
-Financial: Average composite score 74/100. Higher regulatory scrutiny.
-Compliance score below 80 is a dealbreaker in this sector.
-SOC2 Type II and ISO27001 are mandatory, not optional.
+Higher regulatory scrutiny than most sectors.
+Required certifications: SOC1 and SOC2 Type II. ISO27001 strongly preferred.
 PCI-DSS required for any payment processing vendor.
 Revenue concentration above 30% in one client is high risk.
-Red flags: Any SEC/FINRA action, missing SOC2, credit rating below BBB.""",
+Red flags: Any SEC/FINRA action, missing SOC2 Type II, credit rating below BBB.""",
             "metadata": {"industry": "Financial Services", "type": "financial_benchmark"}
         },
         {
             "id": "bench_healthcare",
             "text": """Healthcare industry benchmarks:
-Financial: Average composite score 68/100.
-HIPAA compliance is non-negotiable — automatic reject if missing.
-FDA 21 CFR Part 11 required for software touching medical records.
-SOC2 Type II required. ISO27001 strongly preferred.
-Operational score below 70 is high risk given patient safety implications.
-Red flags: Any FDA warning letter, HIPAA violation history, missing HIPAA BAA.""",
+HIPAA is a regulation, not a certification — there is no official HIPAA
+certification, so its absence from certifications_found is expected.
+Vendors handling PHI must comply with HIPAA and sign a Business Associate
+Agreement (BAA) before contract.
+FDA 21 CFR Part 11 applies to software that manages regulated electronic records.
+Required certification: SOC2 Type II. ISO27001 strongly preferred.
+Operational resilience is critical given patient safety implications.
+Red flags: Any FDA warning letter, HIPAA violation history.""",
             "metadata": {"industry": "Healthcare", "type": "financial_benchmark"}
         },
         {
             "id": "bench_logistics",
             "text": """Logistics & Supply Chain industry benchmarks:
-Financial: Average composite score 62/100. Capital intensive sector.
+Financial: Capital intensive sector.
 On-time delivery rate should exceed 95% for top-tier vendors.
 ISO 9001 and ISO 14001 commonly held. ISO 45001 for safety-critical.
 Operational resilience critical — BCP and disaster recovery required.
@@ -110,9 +116,11 @@ Red flags: Delivery rate below 90%, no BCP documentation, key-person dependency.
         {
             "id": "comp_universal",
             "text": """Universal compliance requirements (all industries):
-OFAC sanctions check is mandatory — any match = immediate reject.
-SOC2 Type II is the baseline trust certification for US enterprise vendors.
-GDPR or CCPA required for any vendor handling personal data.
+OFAC sanctions check is mandatory — any confirmed match = immediate reject.
+Required certifications depend on the vendor's industry; there is no single
+certification required of every vendor.
+GDPR and CCPA are regulations, not certifications: vendors handling personal
+data must comply with them, and they are never "missing certifications".
 Anti-bribery policy (FCPA compliance) required for international vendors.
 UBO declaration required under FinCEN Beneficial Ownership Rule.
 Business registration verified via state Secretary of State database.
@@ -123,8 +131,8 @@ Credit rating below BB- is a financial red flag across all sectors.""",
             "id": "comp_it_services",
             "text": """IT Services compliance requirements:
 SOC2 Type II: mandatory. Issued by registered CPA firm (verify via PCAOB).
-ISO/IEC 27001: strongly preferred, often contractually required.
-ISO 27701: required if vendor processes personal data at scale.
+ISO/IEC 27001: strongly preferred, often contractually required (not mandatory).
+ISO 27701: preferred if vendor processes personal data at scale.
 CSA STAR: cloud-specific certification, important for SaaS vendors.
 Penetration testing reports: request last 12-month report.
 Data processing agreement (DPA) must be signed before contract.
@@ -166,6 +174,20 @@ _seed_benchmarks()
 
 
 # ── Public functions ──────────────────────────────────────
+
+PAST_EVAL_LIMIT = 2
+PAST_EVAL_FETCH = 10
+
+
+def _exclude_vendor(docs: list, metas: list, vendor_name: str, limit: int) -> tuple[list, list]:
+    """Drop past evaluations of the vendor being evaluated, keep up to `limit`."""
+    key = vendor_name.lower().strip()
+    kept = [
+        (doc, meta) for doc, meta in zip(docs, metas)
+        if str((meta or {}).get("vendor_name", "")).lower().strip() != key
+    ][:limit]
+    return [d for d, _ in kept], [m for _, m in kept]
+
 
 def retrieve_context(
     vendor_name: str,
@@ -215,15 +237,21 @@ def retrieve_context(
         except Exception as e:
             print(f"  ⚠ RAG compliance retrieval failed: {e}")
 
-    # 3. Past similar evaluations (only if we have some)
-    if _evaluations.count() > 0:
+    # 3. Past evaluations of OTHER vendors (only if we have some)
+    #    The query used to include the vendor's own name, so its own previous
+    #    evaluation was the top hit and each run anchored on the last score.
+    #    Same-vendor results are now dropped; the query is industry/domain only.
+    total_evals = _evaluations.count()
+    if total_evals > 0:
         try:
             past_results = _evaluations.query(
-                query_texts=[f"{vendor_name} {industry} {domain} risk evaluation"],
-                n_results=min(2, _evaluations.count()),
+                query_texts=[f"{industry} {domain} risk evaluation"],
+                # Over-fetch so 2 remain after dropping same-vendor rows
+                n_results=min(PAST_EVAL_FETCH, total_evals),
             )
             docs = past_results.get("documents", [[]])[0]
             metas = past_results.get("metadatas", [[]])[0]
+            docs, metas = _exclude_vendor(docs, metas, vendor_name, PAST_EVAL_LIMIT)
             if docs:
                 past_lines = ["PAST EVALUATIONS (benchmarks):"]
                 for doc, meta in zip(docs, metas):

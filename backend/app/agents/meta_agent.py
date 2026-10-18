@@ -13,12 +13,68 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
 
+# ── Decision thresholds ───────────────────────────────────
+APPROVE_MIN_COMPOSITE  = 70
+REJECT_BELOW_COMPOSITE = 45
+# Auto-approval requires every agent to report this confidence on average —
+# matches the golden dataset's label criteria ("confidence > 95%").
+APPROVE_MIN_CONFIDENCE = 0.95
+# A low composite only auto-rejects if the agents are at least this sure of
+# it; below this, a low score may just reflect thin data → human review.
+REJECT_MIN_CONFIDENCE  = 0.50
+
+TIER_RANK = {
+    "VERIFIED_REGISTRY": 3,
+    "CORROBORATED": 2,
+    "SELF_REPORTED_UNVERIFIABLE": 1,
+    "CONTRADICTED": 0,
+}
+
+
 def _find_cert_keyword_in_text(text: str) -> str | None:
     norm_text = _normalize(text)
     for cert in TRACKED_CERTS:
         if _normalize(cert) in norm_text:
             return cert
     return None
+
+
+def _tier_for_cert(cert: str | None, tiers: dict) -> str | None:
+    """
+    Dealbreaker text names a cert family ("SOC2"), but tiers are keyed by the
+    specific cert ("SOC2_Type2"). Return the strongest tier among all keys in
+    that family. Previously tiers.get("SOC2") always missed, so a SOC2
+    dealbreaker was hard-rejected even with a verified SOC2_Type2.
+    """
+    if not cert:
+        return None
+    family = _normalize(cert)
+    candidates = [
+        tier for key, tier in tiers.items()
+        if _normalize(key).startswith(family)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda t: TIER_RANK.get(t, -1))
+
+
+def _resolve_ofac_status(state: dict, compliance_output: dict | None) -> str:
+    """
+    The deterministic OFAC screen lives in compliance_data and is the source
+    of truth — it must not depend on the compliance LLM agent succeeding.
+    Falls back to the agent's sanctions_clear only for states built without
+    compliance_data (older callers / scripts).
+    """
+    status = (state.get("compliance_data") or {}).get("ofac_status")
+    if status:
+        return status
+    if compliance_output is not None:
+        sanctions_clear = compliance_output.get("sanctions_clear")
+        if sanctions_clear is True:
+            return "clear"
+        if sanctions_clear is False:
+            return "match"
+    return "unavailable"
 
 
 def _evaluate_dealbreakers(strategic_output: dict | None, compliance_output: dict | None) -> dict:
@@ -42,16 +98,20 @@ def _evaluate_dealbreakers(strategic_output: dict | None, compliance_output: dic
         return {"status": "clear", "reason": None}
 
     triggered = strategic_output.get("dealbreakers_triggered") or []
+    if isinstance(triggered, str):
+        # LLM returned a bare string — don't iterate it character by character
+        triggered = [triggered]
+    triggered = [str(d) for d in triggered if str(d).strip()]
     if not triggered:
         return {"status": "clear", "reason": None}
 
-    tiers = (compliance_output or {}).get("certification_evidence_tiers", {})
+    tiers = (compliance_output or {}).get("certification_evidence_tiers") or {}
 
     unresolved, needs_review, cleared = [], [], []
 
     for dealbreaker in triggered:
         cert = _find_cert_keyword_in_text(dealbreaker)
-        tier = tiers.get(cert) if cert else None
+        tier = _tier_for_cert(cert, tiers)
 
         if tier in ("VERIFIED_REGISTRY", "CORROBORATED"):
             cleared.append(dealbreaker)
@@ -117,8 +177,8 @@ async def run_meta_agent(state: VendorRiskState) -> dict:
     missing         = {k: v for k, v in outputs.items() if v is None}
     missing_weight  = sum(weights[k] for k in missing)
 
-    if missing_weight > 0 and available:
-        total_avail = sum(weights[k] for k in available)
+    total_avail = sum(weights[k] for k in available)
+    if missing_weight > 0 and total_avail > 0:
         for k in available:
             weights[k] += weights[k] / total_avail * missing_weight
 
@@ -147,52 +207,88 @@ async def run_meta_agent(state: VendorRiskState) -> dict:
     if any(c < 0.5 for c in confidences):
         avg_conf *= 0.85
 
-    # ── OFAC override ─────────────────────────────────────
-    ofac_flagged = False
-    if outputs.get("compliance"):
-        ofac_flagged = not outputs["compliance"].get("sanctions_clear", True)
+    # ── OFAC status (deterministic screen, independent of the LLM agent) ──
+    ofac_status  = _resolve_ofac_status(state, outputs.get("compliance"))
+    ofac_matches = (state.get("compliance_data") or {}).get("ofac_matches") or []
+    ofac_detail  = f" SDN entries: {'; '.join(ofac_matches)}." if ofac_matches else ""
 
     # ── Dealbreaker override (previously ignored — see _evaluate_dealbreakers) ──
     dealbreaker_result = _evaluate_dealbreakers(
         outputs.get("strategic"), outputs.get("compliance")
     )
 
+    unavailable_agents = sorted(missing)
+
     # ── Recommendation logic ──────────────────────────────
-    if ofac_flagged:
+    # Order matters: hard rejects first, then anything that blocks an
+    # automated decision, then score-based outcomes. The confidence gate only
+    # guards APPROVE — it previously ran before the score checks, so a vendor
+    # scoring 20/100 at 80% confidence came out as REVIEW instead of REJECT.
+    if ofac_status == "match":
         recommendation = "REJECT"
         decision_reason = (
             "OFAC sanctions match detected. "
-            "Vendor must be rejected immediately — no exceptions."
+            "Vendor must be rejected immediately — no exceptions." + ofac_detail
         )
     elif dealbreaker_result["status"] == "hard_reject":
         recommendation = "REJECT"
         decision_reason = dealbreaker_result["reason"]
+    elif ofac_status == "possible_match":
+        recommendation = "REVIEW"
+        decision_reason = (
+            "Possible OFAC sanctions match — the vendor name partially matches "
+            "SDN list entries. A compliance officer must confirm or clear the "
+            "match before any decision." + ofac_detail
+        )
+    elif ofac_status != "clear":
+        recommendation = "REVIEW"
+        decision_reason = (
+            "OFAC sanctions screening could not be completed (SDN list "
+            "unavailable). Screen manually before proceeding."
+        )
     elif dealbreaker_result["status"] == "needs_review":
         recommendation = "REVIEW"
         decision_reason = dealbreaker_result["reason"]
-    elif avg_conf < 0.95:
+    elif unavailable_agents:
+        # Missing agents are excluded from the confidence average, so without
+        # this gate a partial evaluation could auto-approve or auto-reject.
         recommendation = "REVIEW"
         decision_reason = (
-            f"Confidence ({avg_conf:.0%}) is below the 95% auto-approval "
-            f"threshold. Route to human reviewer before proceeding."
+            f"{len(unavailable_agents)} of {len(outputs)} analysis agents did not "
+            f"produce a usable result ({', '.join(unavailable_agents)}). "
+            f"The evaluation is incomplete — route to a human reviewer."
         )
-    elif composite >= 70:
+    elif composite < REJECT_BELOW_COMPOSITE and avg_conf >= REJECT_MIN_CONFIDENCE:
+        recommendation = "REJECT"
+        decision_reason = (
+            f"Composite score of {composite:.1f} is below the minimum "
+            f"acceptable threshold. Do not proceed with this vendor."
+        )
+    elif composite < REJECT_BELOW_COMPOSITE:
+        recommendation = "REVIEW"
+        decision_reason = (
+            f"Composite score of {composite:.1f} is below the rejection "
+            f"threshold, but confidence ({avg_conf:.0%}) is too low to "
+            f"auto-reject — the low score may reflect missing data."
+        )
+    elif avg_conf < APPROVE_MIN_CONFIDENCE:
+        recommendation = "REVIEW"
+        decision_reason = (
+            f"Confidence ({avg_conf:.0%}) is below the "
+            f"{APPROVE_MIN_CONFIDENCE:.0%} auto-approval threshold. "
+            f"Route to human reviewer before proceeding."
+        )
+    elif composite >= APPROVE_MIN_COMPOSITE:
         recommendation = "APPROVE"
         decision_reason = (
             f"Composite score of {composite:.1f} with {avg_conf:.0%} "
             f"confidence meets approval criteria."
         )
-    elif composite >= 45:
+    else:
         recommendation = "REVIEW"
         decision_reason = (
             f"Composite score of {composite:.1f} falls in the review band. "
             f"Proceed with caution — additional due diligence recommended."
-        )
-    else:
-        recommendation = "REJECT"
-        decision_reason = (
-            f"Composite score of {composite:.1f} is below the minimum "
-            f"acceptable threshold. Do not proceed with this vendor."
         )
 
     # ── Collect all red flags across agents ───────────────
@@ -222,11 +318,14 @@ SCORES:
   Strategic Fit   : {fit_score:.1f}/100
   Confidence      : {avg_conf:.0%}
 
+  OFAC Screening  : {ofac_status}
+  Agents Missing  : {', '.join(unavailable_agents) if unavailable_agents else 'none'}
+
 RED FLAGS ({len(all_red_flags)} total):
 {chr(10).join(f'  ⚠ {f}' for f in all_red_flags) if all_red_flags else '  None detected'}
 
 WHAT YOU SHOULD DO:
-{_get_action_items(recommendation, composite, avg_conf, all_red_flags)}
+{_get_action_items(recommendation, composite, avg_conf, all_red_flags, ofac_status, unavailable_agents)}
 """
 
     return {
@@ -237,6 +336,8 @@ WHAT YOU SHOULD DO:
         "final_recommendation": recommendation,
         "decision_reason":     decision_reason,
         "dealbreaker_status":  dealbreaker_result["status"],
+        "ofac_status":         ofac_status,
+        "unavailable_agents":  unavailable_agents,
         "all_red_flags":       all_red_flags,
         "final_explanation":   explanation.strip(),
         "pipeline_status":     "complete"
@@ -247,7 +348,9 @@ def _get_action_items(
     recommendation: str,
     composite: float,
     confidence: float,
-    red_flags: list
+    red_flags: list,
+    ofac_status: str = "clear",
+    unavailable_agents: list | None = None,
 ) -> str:
     actions = []
 
@@ -286,7 +389,22 @@ def _get_action_items(
     action_num = 3
     flag_text  = " ".join(red_flags).lower()
 
-    if "ftc" in flag_text or "sec" in flag_text:
+    if ofac_status != "clear":
+        actions.append(
+            f"{action_num}. Run a manual OFAC/sanctions screen and record the "
+            "disposition before any further step."
+        )
+        action_num += 1
+
+    if unavailable_agents:
+        actions.append(
+            f"{action_num}. Re-run the evaluation or manually assess the missing "
+            f"areas: {', '.join(unavailable_agents)}."
+        )
+        action_num += 1
+
+    # Word boundaries — a bare substring check matched "sec" in "security"
+    if re.search(r"\b(ftc|sec)\b", flag_text):
         actions.append(
             f"{action_num}. Investigate FTC/SEC regulatory action — "
             "request legal team review before proceeding."

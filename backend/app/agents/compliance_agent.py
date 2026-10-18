@@ -142,6 +142,28 @@ def get_required_certs(industry: str) -> list:
     return INDUSTRY_CERT_MAP["default"]
 
 
+# How each deterministic OFAC screening status is presented to the model.
+# The final sanctions decision is made by the meta-agent from ofac_status,
+# not from the model's sanctions_clear field.
+OFAC_STATUS_TEXT = {
+    "clear": "CLEAR — no match on the OFAC SDN list.",
+    "match": (
+        "MATCH — vendor name exactly matches an OFAC SDN entry. "
+        "Apply the OFAC automatic override."
+    ),
+    "possible_match": (
+        "POSSIBLE MATCH — vendor name partially matches OFAC SDN entries; "
+        "not confirmed. Do NOT apply the automatic override. Add a red flag "
+        "that manual sanctions screening is required."
+    ),
+    "unavailable": (
+        "NOT COMPLETED — the SDN list could not be checked. Do NOT apply the "
+        "automatic override and do NOT treat the vendor as clear. Add a red "
+        "flag that manual sanctions screening is required."
+    ),
+}
+
+
 COMPLIANCE_SYSTEM_PROMPT = f"""
 You are the Compliance & Legal Risk Agent for an enterprise vendor risk platform.
 
@@ -243,7 +265,9 @@ class ComplianceAgent(BaseAgent):
         certs_found = domain_data.get("certifications_found", [])
         cert_tiers  = domain_data.get("certification_evidence_tiers", {})
         regulatory  = domain_data.get("regulatory_frameworks_disclosed", [])
-        ofac_clear  = domain_data.get("ofac_clear", True)
+        ofac_status = domain_data.get("ofac_status", "unavailable")
+        ofac_line   = OFAC_STATUS_TEXT.get(ofac_status, OFAC_STATUS_TEXT["unavailable"])
+        ofac_json   = {"clear": "true", "match": "false"}.get(ofac_status, "null")
         news_flags  = domain_data.get("news_red_flags", [])
 
         # Format cert evidence clearly
@@ -282,7 +306,7 @@ Required for {industry}: {required_certs}
 Regulatory frameworks disclosed (LAWS, not certifications):
   {regulatory}
 
-OFAC clear: {ofac_clear}
+OFAC screening: {ofac_line}
 News red flags: {news_flags if news_flags else "None"}
 
 Your analysis conclusion: {verdict}
@@ -291,7 +315,7 @@ IMPORTANT: certifications_found above are confirmed by the discovery pipeline.
 Do NOT say they are missing. Do NOT penalise for GDPR or CCPA absence from certifications.
 
 Output ONLY valid JSON, starting with {{:
-{{"score": <0-100>, "explanation": "<2 sentences>", "evidence": [], "confidence": <0.0-1.0>, "red_flags": [], "sanctions_clear": {str(ofac_clear).lower()}, "certifications_valid": {list(certs_found)}, "certifications_expired": [], "certifications_missing": {missing}, "scoring_rationale": {{"base_score": <number>, "adjustments": [], "final_score": <number>}}}}"""
+{{"score": <0-100>, "explanation": "<2 sentences>", "evidence": [], "confidence": <0.0-1.0>, "red_flags": [], "sanctions_clear": {ofac_json}, "certifications_valid": {list(certs_found)}, "certifications_expired": [], "certifications_missing": {missing}, "scoring_rationale": {{"base_score": <number>, "adjustments": [], "final_score": <number>}}}}"""
 
 
 async def run_compliance_agent(state: VendorRiskState) -> dict:
