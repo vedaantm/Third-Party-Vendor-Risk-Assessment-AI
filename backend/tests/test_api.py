@@ -691,3 +691,32 @@ def test_non_rate_limit_error_is_not_retried(sleeps):
     with pytest.raises(ValueError):
         asyncio.run(routes._run_agent_with_retry(flaky(ValueError("bad output")), {}, "financial"))
     assert sleeps == []
+
+
+# ── CORS ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, ["http://localhost:5173"]),
+    ("", ["http://localhost:5173"]),
+    ("   ", ["http://localhost:5173"]),
+    ("https://vendoriq.example.com", ["https://vendoriq.example.com"]),
+    (" http://localhost:5173/ , https://app.example.com ,", ["http://localhost:5173", "https://app.example.com"]),
+])
+def test_cors_origins_parsing(raw, expected):
+    assert main_api._cors_origins(raw) == expected
+
+
+def preflight(origin):
+    return call("OPTIONS", "/api/v1/evaluations", headers={
+        "Origin": origin, "Access-Control-Request-Method": "GET"})
+
+
+def test_cors_allows_default_frontend_origin():
+    resp = preflight("http://localhost:5173")
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_rejects_other_origins():
+    resp = preflight("https://evil.example.com")
+    assert "access-control-allow-origin" not in resp.headers
