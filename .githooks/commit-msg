@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Reject commits that credit an AI tool as author or co-author.
+if grep -qiE 'co-authored-by:.*(claude|anthropic)|noreply@anthropic\.com|generated with \[?claude|claude-session:' "$1"; then
+  echo "commit-msg: AI attribution found in commit message; remove it." >&2
+  exit 1
+fi
