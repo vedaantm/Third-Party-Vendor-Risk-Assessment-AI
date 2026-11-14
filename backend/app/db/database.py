@@ -1,27 +1,41 @@
 # backend/app/db/database.py
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.settings import settings
 
-_raw_url = settings.database_url.get_secret_value()
 
-# asyncpg through SQLAlchemy requires ssl passed as connect_args,
-# not as a query parameter — strip it from the URL if present.
-_db_url = _raw_url.replace("?ssl=require", "").replace("&ssl=require", "")
+def build_engine(url: str, *, pooled: bool = True) -> AsyncEngine:
+    """
+    The app's engine settings for a given URL. Postgres (asyncpg) URLs get
+    the Supabase options; anything else (e.g. SQLite in tests) is left alone.
+    pooled=False is for one-off processes such as migrations.
+    """
+    if not url.startswith("postgresql+asyncpg"):
+        return create_async_engine(url, poolclass=NullPool)
 
-engine = create_async_engine(
-    _db_url,
-    echo=False,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    connect_args={
+    # asyncpg through SQLAlchemy requires ssl passed as connect_args,
+    # not as a query parameter — strip it from the URL if present.
+    url = url.replace("?ssl=require", "").replace("&ssl=require", "")
+    connect_args = {
         "ssl": "require",
         "statement_cache_size": 0,  # required for Supabase Transaction Pooler (pgbouncer)
-    },
-)
+    }
+    if not pooled:
+        return create_async_engine(url, poolclass=NullPool, connect_args=connect_args)
+    return create_async_engine(
+        url,
+        echo=False,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args=connect_args,
+    )
+
+
+engine = build_engine(settings.database_url.get_secret_value())
 
 AsyncSessionLocal = sessionmaker(
     engine,
