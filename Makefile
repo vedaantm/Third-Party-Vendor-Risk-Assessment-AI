@@ -1,7 +1,7 @@
 # VendorIQ developer commands. Run `make help` for the list.
 #
-# Needs GNU make. On Windows: `winget install ezwinports.make`, or run the
-# commands under a target by hand.
+# Needs GNU make and uv. On Windows: `winget install ezwinports.make` and
+# `winget install astral-sh.uv`, or run the commands under a target by hand.
 #
 # `check` is what CLAUDE.md requires before every commit: the frontend type
 # check plus both test suites. Lint (ruff) and Python type checking (mypy)
@@ -9,8 +9,7 @@
 # Today ruff reports 108 existing issues in backend/app and mypy isn't a
 # dependency yet, so adding them now would make every commit red.
 
-PYTHON ?= python
-NPM    ?= npm
+NPM ?= npm
 
 .DEFAULT_GOAL := help
 .PHONY: help install check test test-backend test-frontend typecheck eval-smoke up
@@ -18,8 +17,8 @@ NPM    ?= npm
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
 
-install: ## Install backend (with test) and frontend dependencies
-	$(PYTHON) -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+install: ## Install locked backend (incl. dev group) and frontend dependencies
+	cd backend && uv sync --locked
 	cd frontend && $(NPM) ci
 
 check: typecheck test ## Everything that must pass before a commit
@@ -27,7 +26,7 @@ check: typecheck test ## Everything that must pass before a commit
 test: test-backend test-frontend ## Backend and frontend tests (offline)
 
 test-backend: ## Backend tests: no network, no Supabase, no real chroma_db
-	$(PYTHON) -m pytest backend/tests -q
+	cd backend && uv run --locked pytest tests -q
 
 test-frontend: frontend/node_modules ## Frontend tests (Vitest)
 	cd frontend && $(NPM) test
