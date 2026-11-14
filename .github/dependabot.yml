@@ -1,0 +1,50 @@
+# Dependabot opens weekly update PRs. Minor and patch updates are grouped
+# into one PR per ecosystem; major updates arrive one PR each. Commit
+# messages use CLAUDE.md's conventional-commit format: "chore(deps): ...".
+version: 2
+updates:
+  # Backend: pyproject.toml + uv.lock (the "uv" ecosystem updates both)
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      backend-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # Frontend: package.json + package-lock.json
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # Base images in backend/Dockerfile (python, uv) and frontend/Dockerfile (node, nginx)
+  - package-ecosystem: "docker"
+    directories: ["/backend", "/frontend"]
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Images in docker-compose.yml (redis)
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Workflow actions; workflows arrive with CI in Phase 0 item 8
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
