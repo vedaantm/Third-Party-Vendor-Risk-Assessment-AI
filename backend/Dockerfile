@@ -2,6 +2,9 @@
 
 FROM python:3.11-slim
 
+# uv installs exactly the versions pinned in uv.lock
+COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
+
 WORKDIR /app
 
 # System libraries needed for lxml (your scraper uses it)
@@ -12,9 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages first (this layer gets cached —
-# rebuilds are fast unless requirements.txt changes)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# rebuilds are fast unless pyproject.toml or uv.lock change).
+# Into the image's system Python, so `uvicorn` stays on PATH; no dev group.
+ENV UV_PROJECT_ENVIRONMENT=/usr/local \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --locked --no-dev
 
 # Now copy your actual code
 COPY . .
