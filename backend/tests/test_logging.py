@@ -164,20 +164,11 @@ def test_redis_host_never_includes_credentials(url, expected):
     assert _redis_host(url) == expected
 
 
-# Protected files, converted in a separate approved commit
-_PRINT_ALLOWLIST: set[str] = {
-    "api/routes.py",
-    "agents/base_agent.py",
-    "services/cert_extraction_agent.py",
-}
-
-
 def test_no_print_calls_in_backend_app():
     """Plan done-criterion: grep -r "print(" backend/app returns nothing."""
     offenders = [
         f"{p.relative_to(APP_DIR).as_posix()}:{n}"
         for p in APP_DIR.rglob("*.py")
-        if p.relative_to(APP_DIR).as_posix() not in _PRINT_ALLOWLIST
         for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if "print(" in line
     ]
