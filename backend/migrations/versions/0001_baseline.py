@@ -21,6 +21,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import context, op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
@@ -82,7 +83,7 @@ def upgrade() -> None:
         sa.Column("final_explanation", sa.Text(), nullable=True),
         sa.Column("red_flags", sa.JSON(), nullable=True),
         sa.Column("weights", sa.JSON(), nullable=True),
-        sa.Column("agent_outputs", sa.JSON(), nullable=True),
+        sa.Column("agent_outputs", sa.JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("evaluation_id"),

@@ -109,6 +109,7 @@ def test_postgres_sql_renders_offline_without_a_database():
     for table in TABLES:
         assert f"CREATE TABLE {table} (" in sql
     assert "TIMESTAMP WITH TIME ZONE" in sql and "UNIQUE (evaluation_id)" in sql
+    assert "agent_outputs JSONB" in sql   # matches the production Supabase column
     assert "INSERT INTO alembic_version (version_num) VALUES ('0001')" in sql
 
 
@@ -174,3 +175,10 @@ def test_app_startup_does_not_create_tables(db, monkeypatch):
             pass
     asyncio.run(start_and_stop())
     assert schema(db) == {}
+
+
+def test_agent_outputs_is_jsonb_on_postgres_and_json_elsewhere():
+    from sqlalchemy.dialects import postgresql, sqlite
+    column_type = Base.metadata.tables["evaluations"].c.agent_outputs.type
+    assert column_type.compile(dialect=postgresql.dialect()) == "JSONB"
+    assert column_type.compile(dialect=sqlite.dialect()) == "JSON"
