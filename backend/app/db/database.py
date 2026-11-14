@@ -6,11 +6,12 @@ from sqlalchemy.pool import NullPool
 from app.settings import settings
 
 
-def build_engine(url: str, *, pooled: bool = True) -> AsyncEngine:
+def build_engine(url: str, *, pooled: bool = True, ssl: str | None = None) -> AsyncEngine:
     """
     The app's engine settings for a given URL. Postgres (asyncpg) URLs get
     the Supabase options; anything else (e.g. SQLite in tests) is left alone.
-    pooled=False is for one-off processes such as migrations.
+    pooled=False is for one-off processes such as migrations. ssl is
+    "require" or "disable" and defaults to the DATABASE_SSL setting.
     """
     if not url.startswith("postgresql+asyncpg"):
         return create_async_engine(url, poolclass=NullPool)
@@ -18,10 +19,11 @@ def build_engine(url: str, *, pooled: bool = True) -> AsyncEngine:
     # asyncpg through SQLAlchemy requires ssl passed as connect_args,
     # not as a query parameter — strip it from the URL if present.
     url = url.replace("?ssl=require", "").replace("&ssl=require", "")
-    connect_args = {
-        "ssl": "require",
+    connect_args: dict = {
         "statement_cache_size": 0,  # required for Supabase Transaction Pooler (pgbouncer)
     }
+    if (ssl or settings.database_ssl) == "require":
+        connect_args["ssl"] = "require"
     if not pooled:
         return create_async_engine(url, poolclass=NullPool, connect_args=connect_args)
     return create_async_engine(
