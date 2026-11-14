@@ -1,6 +1,6 @@
 # backend/Dockerfile
 
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 # uv installs exactly the versions pinned in uv.lock
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
