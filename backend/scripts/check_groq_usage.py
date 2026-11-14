@@ -1,4 +1,4 @@
-# backend/check_groq_usage.py
+# backend/scripts/check_groq_usage.py
 import os
 import requests
 from dotenv import load_dotenv

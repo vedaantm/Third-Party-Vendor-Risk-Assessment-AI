@@ -1,4 +1,4 @@
-# backend/test_registry_connectors.py
+# backend/scripts/run_registry_connectors.py
 import sys
 sys.path.insert(0, ".")
 

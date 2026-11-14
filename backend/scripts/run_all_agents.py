@@ -2,9 +2,11 @@ import asyncio
 import json
 import os
 import traceback
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=r"C:\Users\dell\Desktop\IBM WATSON\backend\.env")
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")  # backend/.env
 
 from app.agents.financial_agent   import run_financial_agent
 from app.agents.compliance_agent  import run_compliance_agent

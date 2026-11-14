@@ -1,5 +1,5 @@
-# backend/test_compliance_stress.py
-# Run from backend/ with: python test_compliance_stress.py
+# backend/scripts/run_compliance_stress.py
+# Run from backend/ with: python -m scripts.run_compliance_stress
 
 import asyncio
 import time
