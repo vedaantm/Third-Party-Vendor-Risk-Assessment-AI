@@ -12,7 +12,7 @@
 NPM ?= npm
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test test-backend test-frontend typecheck eval-smoke up
+.PHONY: help install check test test-backend test-frontend typecheck eval-smoke migrate up
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
@@ -43,5 +43,8 @@ eval-smoke: ## Prompt-change evals (Phase 2) - fails until they exist
 	@echo "CLAUDE.md requires it for prompt changes, so those are blocked until then." >&2
 	@exit 1
 
-up: ## Start frontend, backend and Redis (uses backend/.env, i.e. Supabase)
+migrate: ## Apply migrations to DATABASE_URL (today that is Supabase - stamp it first, see ADR 0001)
+	cd backend && uv run --locked alembic upgrade head
+
+up: ## Start frontend, backend (runs migrations) and Redis; uses backend/.env, i.e. Supabase
 	docker compose up --build

@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.db.database import engine, Base
+from app.db.database import engine
 from app.settings import settings
 from app.api.routes import router
 
@@ -16,12 +16,10 @@ from app.api.routes import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Runs once on startup — creates DB tables if they don't exist.
-    You don't need to run any migration commands manually.
+    The schema is managed by Alembic migrations (backend/migrations), not
+    created here: run `uv run alembic upgrade head` (the Docker image does
+    this before starting the API). See docs/adr/0001-schema-migrations.md.
     """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("✅ Database tables ready")
     yield
     # Cleanup on shutdown
     await engine.dispose()

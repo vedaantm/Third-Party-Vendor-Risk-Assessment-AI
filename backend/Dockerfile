@@ -29,4 +29,6 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main_api:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
+# Apply migrations, then start the API. A database created by the old
+# create_all startup step is refused until stamped (see migrations/versions/0001_baseline.py).
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn main_api:app --host 0.0.0.0 --port 8000 --loop asyncio"]

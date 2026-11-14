@@ -23,6 +23,7 @@ WHY A JOBS TABLE?
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import String, Float, DateTime, Text, JSON, Integer
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
 
@@ -65,7 +66,11 @@ class Evaluation(Base):
 
     # The weights used for this evaluation
     weights:       Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    agent_outputs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # JSONB on Postgres, matching the production Supabase column (changed
+    # there by hand at some point); plain JSON elsewhere, e.g. SQLite tests.
+    agent_outputs: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
 
     # When it ran
     created_at: Mapped[datetime] = mapped_column(
