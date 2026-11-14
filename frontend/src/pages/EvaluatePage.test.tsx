@@ -30,6 +30,10 @@ async function fillValidForm(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Dealbreakers"), "no SOC 2 Type 2 report{Enter}");
 }
 
+// Typing into a whole form is the slowest thing in the suite; on a busy
+// machine a test brushed the default 5 s limit, so allow more headroom.
+vi.setConfig({ testTimeout: 15_000 });
+
 afterEach(() => vi.unstubAllGlobals());
 
 test("submits the exact request body the backend expects and opens the job", async () => {
@@ -39,7 +43,7 @@ test("submits the exact request body the backend expects and opens the job", asy
       json(202, { job_id: "job-abc", evaluation_id: "eval-1", vendor_name: "Okta, Inc.", status: "pending",
                   message: "", poll_url: "/api/v1/jobs/job-abc" })),
   );
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderPage();
   await fillValidForm(user);
   await user.click(screen.getByRole("button", { name: "Start evaluation" }));
@@ -69,7 +73,7 @@ test("shows 422 validation errors from the server next to the fields", async () 
         ],
       })),
   );
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderPage();
   await fillValidForm(user);
   await user.click(screen.getByRole("button", { name: "Start evaluation" }));
@@ -82,7 +86,7 @@ test("shows 422 validation errors from the server next to the fields", async () 
 
 test("does not submit when weights don't sum to 1", async () => {
   const fetchMock = mockFetch(companySearch);
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderPage();
   await fillValidForm(user);
   const financial = screen.getByLabelText("Financial");
@@ -97,7 +101,7 @@ test("does not submit when weights don't sum to 1", async () => {
 
 test("requires vendor, company, industry and contract value", async () => {
   const fetchMock = mockFetch(companySearch);
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderPage();
   await user.click(screen.getByRole("button", { name: "Start evaluation" }));
   expect(screen.getByText("Enter the vendor to evaluate.")).toBeInTheDocument();
@@ -111,7 +115,7 @@ test("reports an unreachable API", async () => {
   mockFetch(companySearch, on("POST", "/api/v1/evaluate", () => {
     throw new TypeError("Failed to fetch");
   }));
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderPage();
   await fillValidForm(user);
   await user.click(screen.getByRole("button", { name: "Start evaluation" }));
