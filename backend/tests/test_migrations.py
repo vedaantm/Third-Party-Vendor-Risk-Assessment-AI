@@ -182,3 +182,100 @@ def test_agent_outputs_is_jsonb_on_postgres_and_json_elsewhere():
     column_type = Base.metadata.tables["evaluations"].c.agent_outputs.type
     assert column_type.compile(dialect=postgresql.dialect()) == "JSONB"
     assert column_type.compile(dialect=sqlite.dialect()) == "JSON"
+
+
+# ── Real PostgreSQL (opt-in: `make test-postgres`) ────────
+# Each test gets its own throwaway database on the server TEST_POSTGRES_URL
+# points at (the local docker-compose Postgres), dropped afterwards.
+
+import os
+import uuid
+
+from sqlalchemy.engine import make_url
+
+TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
+requires_postgres = pytest.mark.skipif(
+    not TEST_POSTGRES_URL, reason="set TEST_POSTGRES_URL (make test-postgres) to run against Postgres"
+)
+
+
+async def _admin(sql: str) -> None:
+    import asyncpg
+    u = make_url(TEST_POSTGRES_URL)
+    conn = await asyncpg.connect(user=u.username, password=u.password, host=u.host,
+                                 port=u.port, database=u.database)
+    try:
+        await conn.execute(sql)
+    finally:
+        await conn.close()
+
+
+@pytest.fixture
+def pg_url():
+    name = f"vendoriq_test_{uuid.uuid4().hex[:10]}"
+    asyncio.run(_admin(f'CREATE DATABASE "{name}"'))
+    try:
+        yield make_url(TEST_POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
+    finally:
+        asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+
+
+def pg_config(url: str) -> Config:
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.attributes["skip_logging"] = True
+    cfg.cmd_opts = argparse.Namespace(x=[f"url={url}", "ssl=disable"])
+    return cfg
+
+
+def pg_run(url: str, fn):
+    """Run fn(sync_connection) on a fresh engine and return its result."""
+    from app.db.database import build_engine
+
+    async def go():
+        engine = build_engine(url, pooled=False, ssl="disable")
+        try:
+            async with engine.begin() as conn:
+                return await conn.run_sync(fn)
+        finally:
+            await engine.dispose()
+    return asyncio.run(go())
+
+
+def pg_schema(url: str) -> dict:
+    def read(conn):
+        insp = sa.inspect(conn)
+        return {
+            t: {c["name"]: (str(c["type"]), c["nullable"]) for c in insp.get_columns(t)}
+            for t in sorted(set(insp.get_table_names()) - {"alembic_version"})
+        }
+    return pg_run(url, read)
+
+
+@requires_postgres
+def test_postgres_upgrade_check_and_downgrade(pg_url):
+    cfg = pg_config(pg_url)
+    command.upgrade(cfg, "head")
+    assert set(pg_schema(pg_url)) == TABLES
+    assert pg_schema(pg_url)["evaluations"]["agent_outputs"][0] == "JSONB"
+    command.check(cfg)
+    command.downgrade(cfg, "base")
+    assert pg_schema(pg_url) == {}
+
+
+@requires_postgres
+def test_postgres_migrated_schema_matches_create_all(pg_url):
+    command.upgrade(pg_config(pg_url), "head")
+    migrated = pg_schema(pg_url)
+    command.downgrade(pg_config(pg_url), "base")
+    pg_run(pg_url, Base.metadata.create_all)
+    assert pg_schema(pg_url) == migrated
+
+
+@requires_postgres
+def test_postgres_create_all_database_is_refused_then_stamped(pg_url):
+    pg_run(pg_url, Base.metadata.create_all)       # what Supabase looked like
+    cfg = pg_config(pg_url)
+    with pytest.raises(Exception, match="alembic stamp 0001"):
+        command.upgrade(cfg, "head")
+    command.stamp(cfg, "0001")
+    command.check(cfg)

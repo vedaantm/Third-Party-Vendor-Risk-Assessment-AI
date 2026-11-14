@@ -2,7 +2,9 @@
 #
 # Services:
 #   frontend — VendorIQ web app (nginx serving the Vite build) on :5173
-#   backend  — FastAPI + the full evaluation pipeline
+#   backend  — FastAPI + the full evaluation pipeline (runs migrations on start)
+#   postgres — local Postgres 16 + pgvector; the backend uses it by default,
+#              so `docker compose up` never touches Supabase
 #   redis    — In-memory cache for cert results + rate limit tracking
 #
 # Why Redis?
@@ -16,6 +18,11 @@
 #   Backend only:       docker-compose up backend
 #   Redis only:         docker-compose up redis
 #   Fresh start:        docker-compose down -v && docker-compose up
+#   Database only:      docker compose up -d --wait postgres   (make db-up)
+#
+# To point the stack at Supabase instead of the local database (rarely
+# wanted), set COMPOSE_DATABASE_URL to the Supabase URL and
+# COMPOSE_DATABASE_SSL=require in your shell before `docker compose up`.
 
 services:
 
@@ -46,12 +53,35 @@ services:
     depends_on:
       redis:
         condition: service_healthy   # Don't start until Redis is ready
+      postgres:
+        condition: service_healthy   # Migrations run as soon as it accepts connections
     environment:
+      # Local database by default; these override DATABASE_URL in backend/.env
+      DATABASE_URL: "${COMPOSE_DATABASE_URL:-postgresql+asyncpg://vendoriq:${LOCAL_POSTGRES_PASSWORD:-vendoriq-local}@postgres:5432/vendoriq}"
+      DATABASE_SSL: "${COMPOSE_DATABASE_SSL:-disable}"
       # Redis URL — uses the service name "redis" as the hostname
       # This works because Docker Compose puts services on the same network
       REDIS_URL: "redis://redis:6379"
       # Browser origin of the frontend service above
       CORS_ALLOW_ORIGINS: "http://localhost:5173"
+    restart: unless-stopped
+
+  # ── Postgres (local) ────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16   # Postgres 16 with pgvector (used from Phase 4)
+    environment:
+      POSTGRES_USER: vendoriq
+      POSTGRES_PASSWORD: "${LOCAL_POSTGRES_PASSWORD:-vendoriq-local}"   # local-only throwaway
+      POSTGRES_DB: vendoriq
+    ports:
+      - "127.0.0.1:5432:5432"   # this machine only — for tests and psql
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vendoriq -d vendoriq"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   # ── Redis ───────────────────────────────────────────────────────────────────
@@ -81,6 +111,9 @@ services:
 
 
 volumes:
+  postgres_data:
+    # Named volume — the local database survives restarts; `down -v` wipes it
+
   chroma_data:
     # Named volume — survives container restarts and rebuilds
     # ChromaDB vector embeddings live here

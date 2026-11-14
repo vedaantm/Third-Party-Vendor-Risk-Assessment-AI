@@ -12,7 +12,7 @@
 NPM ?= npm
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test test-backend test-frontend typecheck eval-smoke migrate up
+.PHONY: help install check test test-backend test-frontend typecheck eval-smoke migrate db-up test-postgres up
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
@@ -43,8 +43,17 @@ eval-smoke: ## Prompt-change evals (Phase 2) - fails until they exist
 	@echo "CLAUDE.md requires it for prompt changes, so those are blocked until then." >&2
 	@exit 1
 
-migrate: ## Apply migrations to DATABASE_URL (today that is Supabase - stamp it first, see ADR 0001)
+migrate: ## Apply migrations to DATABASE_URL from backend/.env (Supabase)
 	cd backend && uv run --locked alembic upgrade head
 
-up: ## Start frontend, backend (runs migrations) and Redis; uses backend/.env, i.e. Supabase
+db-up: ## Start only the local Postgres container (127.0.0.1:5432)
+	docker compose up -d --wait postgres
+
+LOCAL_POSTGRES_URL ?= postgresql+asyncpg://vendoriq:vendoriq-local@127.0.0.1:5432/vendoriq
+
+test-postgres: export TEST_POSTGRES_URL := $(LOCAL_POSTGRES_URL)
+test-postgres: db-up ## Migration tests against the local Postgres (needs Docker)
+	cd backend && uv run --locked pytest tests/test_migrations.py -q
+
+up: ## Start the full stack on the local Postgres (never Supabase)
 	docker compose up --build

@@ -59,7 +59,8 @@ def _run_sync(connection) -> None:
 
 
 async def _run_async() -> None:
-    engine = build_engine(_url(), pooled=False)
+    # `-x ssl=disable` for a local Postgres; otherwise the DATABASE_SSL setting
+    engine = build_engine(_url(), pooled=False, ssl=context.get_x_argument(as_dictionary=True).get("ssl"))
     try:
         async with engine.connect() as connection:
             await connection.run_sync(_run_sync)

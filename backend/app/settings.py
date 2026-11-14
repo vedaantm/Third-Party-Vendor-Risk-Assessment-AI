@@ -14,6 +14,7 @@ rather than a KeyError deep inside the first request that needs it.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +34,9 @@ class Settings(BaseSettings):
     database_url: SecretStr = Field(description="SQLAlchemy URL, e.g. postgresql+asyncpg://…")
 
     # ── Optional ──────────────────────────────────────────
+    # TLS to Postgres: Supabase requires it; the local docker-compose
+    # Postgres has no certificate, so the stack sets DATABASE_SSL=disable.
+    database_ssl: Literal["require", "disable"] = "require"
     redis_url: str = "redis://localhost:6379"
     chroma_path: str = "./chroma_db"
     # Comma-separated; parsed by main_api._cors_origins (blank → default origin)

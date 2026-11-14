@@ -115,3 +115,50 @@ def test_test_process_uses_test_values_only():
     assert settings.chroma_path == TEST_ENV["CHROMA_PATH"]
     assert settings.redis_url == TEST_ENV["REDIS_URL"]
 
+
+
+# ── DATABASE_SSL and build_engine ─────────────────────────
+
+def test_database_ssl_defaults_to_require_and_accepts_disable(clean_env, tmp_path):
+    base = {"GROQ_API_KEY": "g", "DATABASE_URL": "d"}
+    assert Settings(_env_file=make_env_file(tmp_path, **base)).database_ssl == "require"
+    assert Settings(_env_file=make_env_file(tmp_path, **base, DATABASE_SSL="disable")).database_ssl == "disable"
+
+
+def test_database_ssl_rejects_other_values(clean_env, tmp_path):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Settings(_env_file=make_env_file(tmp_path, GROQ_API_KEY="g", DATABASE_URL="d", DATABASE_SSL="yes"))
+
+
+@pytest.fixture
+def engine_calls(monkeypatch):
+    from app.db import database
+    calls = []
+    monkeypatch.setattr(database, "create_async_engine", lambda url, **kw: calls.append((url, kw)) or object())
+    return database, calls
+
+
+PG = "postgresql+asyncpg://u:p@db.example:6543/postgres"
+
+
+@pytest.mark.parametrize("setting, override, expect_ssl", [
+    ("require", None, True),        # Supabase: the default
+    ("disable", None, False),       # local docker-compose Postgres
+    ("require", "disable", False),  # explicit override, e.g. alembic -x ssl=disable
+    ("disable", "require", True),
+])
+def test_build_engine_ssl(engine_calls, monkeypatch, setting, override, expect_ssl):
+    database, calls = engine_calls
+    monkeypatch.setattr(settings, "database_ssl", setting)
+    database.build_engine(PG + "?ssl=require", ssl=override)
+    url, kwargs = calls[0]
+    assert url == PG                                   # ?ssl=require is stripped either way
+    assert kwargs["connect_args"]["statement_cache_size"] == 0
+    assert (kwargs["connect_args"].get("ssl") == "require") is expect_ssl
+
+
+def test_build_engine_leaves_non_postgres_urls_alone(engine_calls):
+    database, calls = engine_calls
+    database.build_engine("sqlite+aiosqlite:///x.db")
+    assert "connect_args" not in calls[0][1]

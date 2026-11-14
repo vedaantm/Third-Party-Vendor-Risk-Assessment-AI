@@ -58,6 +58,7 @@ TEST_ENV = {
     "CORS_ALLOW_ORIGINS": "",                     # blank → default; tests assert it
     "CERT_CACHE_VALID_AFTER": "",                 # blank → no cutoff
     "CSA_STAR_API_KEY": "",
+    "DATABASE_SSL": "require",                    # the production default
 }
 os.environ.update(TEST_ENV)
 
