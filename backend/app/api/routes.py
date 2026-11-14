@@ -36,7 +36,6 @@ REDIS INTEGRATION:
 
 import asyncio
 import math
-import os
 import re
 import uuid
 
@@ -49,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, update
 
 from app.db.database import get_db, AsyncSessionLocal
+from app.settings import settings
 from app.db.models import Evaluation, CertCache, Job
 from app.agents.financial_agent   import run_financial_agent
 from app.agents.compliance_agent  import run_compliance_agent
@@ -157,7 +157,7 @@ def _parse_cert_cache_valid_after(raw: str | None) -> datetime | None:
 #              or delete keys matching cert:*
 # If a purge isn't possible, set CERT_CACHE_VALID_AFTER to the deploy date.
 CERT_CACHE_VALID_AFTER = _parse_cert_cache_valid_after(
-    os.environ.get("CERT_CACHE_VALID_AFTER")
+    settings.cert_cache_valid_after
 )
 
 

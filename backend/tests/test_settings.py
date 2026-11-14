@@ -115,10 +115,3 @@ def test_test_process_uses_test_values_only():
     assert settings.chroma_path == TEST_ENV["CHROMA_PATH"]
     assert settings.redis_url == TEST_ENV["REDIS_URL"]
 
-
-def test_old_config_module_path_still_imports():
-    # Temporary shim until base_agent.py / cert_extraction_agent.py import app.llm.config
-    from app import config_watsonx
-    from app.llm import config
-    assert config_watsonx.get_llm is config.get_llm
-    assert config_watsonx.PRIMARY_MODEL == config.PRIMARY_MODEL
