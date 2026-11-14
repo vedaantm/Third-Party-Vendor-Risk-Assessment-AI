@@ -1,16 +1,28 @@
 # backend/main_api.py
 
 import math
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
+
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.db.database import engine
+from app.log import configure_logging, get_logger
 from app.settings import settings
+
+# Before importing the rest of the app: some modules log at import time
+configure_logging(settings.log_level, settings.log_format)
+
 from app.api.routes import router
+from app.db.database import engine
+
+log = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -53,6 +65,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# A client-supplied X-Request-ID is kept only if it's short and plain, so a
+# caller can't inject arbitrary text into the logs; otherwise we generate one.
+_REQUEST_ID_OK = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """Bind request_id to every log line for this request, echo it back, log the request."""
+    incoming = request.headers.get("x-request-id", "")
+    request_id = incoming if _REQUEST_ID_OK.match(incoming) else uuid.uuid4().hex
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id)
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        log.info(
+            "http.request",
+            method=request.method,
+            path=request.url.path,
+            status=status,
+            duration_ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+        structlog.contextvars.clear_contextvars()
+
 
 def _json_safe(value):
     """Replace NaN / ±Infinity (not valid JSON) with their string form."""

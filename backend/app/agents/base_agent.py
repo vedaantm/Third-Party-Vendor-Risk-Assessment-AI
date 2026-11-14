@@ -4,7 +4,10 @@ import re
 from abc import ABC, abstractmethod
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.llm.config import get_llm, PRIMARY_MODEL
+from app.log import get_logger
 from app.orchestrator.state import VendorRiskState
+
+log = get_logger(__name__)
 
 
 class BaseAgent(ABC):
@@ -47,15 +50,15 @@ class BaseAgent(ABC):
         vendor_name = state.get("vendor_name", "Unknown Vendor")
 
         # Step 1 — Chain of thought reasoning pass
-        print(f"\n  → Step 1: Reasoning through {vendor_name}'s data...")
+        agent = type(self).__name__
+        log.info("agent.reasoning_started", agent=agent, vendor=vendor_name)
         reasoning = await self._get_reasoning(vendor_name, domain_data)
 
-        print("\n── Chain-of-Thought Reasoning ──────────────────────────")
-        print(reasoning)
-        print("────────────────────────────────────────────────────────\n")
+        # Full model output: debug only, so INFO logs stay one line per step
+        log.debug("agent.reasoning", agent=agent, vendor=vendor_name, reasoning=reasoning)
 
         # Step 2 — Scoring pass informed by the reasoning
-        print(f"  → Step 2: Producing final score based on reasoning...")
+        log.info("agent.scoring_started", agent=agent, vendor=vendor_name)
         user_prompt = self._build_user_prompt(vendor_name, domain_data, reasoning)
 
         messages = [
@@ -171,7 +174,7 @@ class BaseAgent(ABC):
         )
 
     def _parse_json_response(self, raw: str) -> dict:
-        print(f"\n[STEP2 RAW]:\n{raw}\n[END STEP2]")
+        log.debug("agent.raw_output", agent=type(self).__name__, raw=raw)
         return parse_agent_output(raw)
 
 
@@ -245,7 +248,8 @@ def parse_agent_output(raw: str) -> dict:
     explanation_match = re.search(r'"explanation"\s*:\s*"([^"]{10,})"', raw)
 
     if score_match and confidence_match:
-        print(f"  [INFO] Partial JSON — salvaged score: {score_match.group(1)}")
+        log.warning("agent.output_salvaged", reason="truncated_json",
+                    score=float(score_match.group(1)))
         return validate_agent_output({
             "score":       float(score_match.group(1)),
             "confidence":  float(confidence_match.group(1)),

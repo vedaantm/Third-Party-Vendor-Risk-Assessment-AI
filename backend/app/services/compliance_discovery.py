@@ -7,10 +7,15 @@ Fix 2: Regulations never enter certification_evidence_tiers.
 Fix 3: Web fallback skipped when 2+ VERIFIED_REGISTRY certs already found.
 """
 
-from app.services.edgar_pipeline import discover_certifications_from_edgar
-from app.services.cert_pipeline import discover_and_extract_certifications as discover_via_web
+from app.log import get_logger
+from app.services.cert_pipeline import (
+    discover_and_extract_certifications as discover_via_web,
+)
 from app.services.csa_star_connector import check_csa_star
+from app.services.edgar_pipeline import discover_certifications_from_edgar
 from app.services.fedramp_connector import check_fedramp
+
+log = get_logger(__name__)
 
 # Regulations and compliance frameworks that companies are subject to
 # or help clients comply with — not certifications they hold themselves.
@@ -31,7 +36,7 @@ async def discover_certifications(
     sources_used: list = []
 
     # ── 1. SEC EDGAR ──────────────────────────────────────────────────────
-    print(f"\n[compliance_discovery] EDGAR check for {company_name}")
+    log.info("cert_discovery.source_started", vendor=company_name, source="edgar")
     edgar_result = await discover_certifications_from_edgar(company_name, ticker_symbol)
     edgar_cik = edgar_result.get("edgar_cik")
     edgar_url = edgar_result.get("edgar_filing_url")
@@ -48,7 +53,7 @@ async def discover_certifications(
     )
 
     # ── 2. CSA STAR ───────────────────────────────────────────────────────
-    print(f"\n[compliance_discovery] CSA STAR check for {company_name}")
+    log.info("cert_discovery.source_started", vendor=company_name, source="csa_star")
     csa = check_csa_star(company_name)
     if csa["csa_star_found"]:
         tiers["CSA_STAR"] = csa["csa_star_tier"]
@@ -56,7 +61,7 @@ async def discover_certifications(
         sources_used.append("CSA STAR Registry")
 
     # ── 3. FedRAMP ────────────────────────────────────────────────────────
-    print(f"\n[compliance_discovery] FedRAMP check for {company_name}")
+    log.info("cert_discovery.source_started", vendor=company_name, source="fedramp")
     fedramp = check_fedramp(company_name)
     if fedramp["fedramp_found"]:
         tiers["FedRAMP"] = fedramp["fedramp_tier"]
@@ -72,19 +77,14 @@ async def discover_certifications(
     edgar_found_certs = len(edgar_result.get("certifications_found", [])) >= 3
 
     if edgar_found_certs:
-        print(
-            f"\n[compliance_discovery] Skipping web fallback "
-            f"(EDGAR found {len(edgar_result['certifications_found'])} certs — sufficient coverage)"
-        )
+        log.info("cert_discovery.web_fallback_skipped", vendor=company_name,
+                 edgar_certs=len(edgar_result["certifications_found"]))
 
     should_run_web = not edgar_found_certs
 
     if should_run_web:
         import asyncio
-        print(
-            f"\n[compliance_discovery] Web search fallback for {company_name} "
-            f"(EDGAR found no specific certs)"
-        )
+        log.info("cert_discovery.web_fallback_started", vendor=company_name)
         await asyncio.sleep(5)  # cooldown between EDGAR and web extraction calls
         web_result = await discover_via_web(company_name)
 

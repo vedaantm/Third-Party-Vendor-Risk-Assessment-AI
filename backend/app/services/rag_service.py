@@ -6,7 +6,10 @@ from pathlib import Path
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 
+from app.log import get_logger
 from app.settings import settings
+
+log = get_logger(__name__)
 
 CHROMA_PATH = settings.chroma_path
 
@@ -80,7 +83,7 @@ def _seed_benchmarks():
     described as certifications, and no text gives platform scores for named
     vendors (that anchors the agents on a remembered number).
     """
-    print("  → RAG: Seeding industry benchmarks...")
+    log.info("rag.seeding")
 
     benchmark_docs = [
         {
@@ -193,8 +196,8 @@ Supply chain audit rights clause in contract recommended.""",
         metadatas=[d["metadata"] for d in compliance_docs],
     )
 
-    print(f"  ✅ RAG: Seeded {len(benchmark_docs)} benchmarks, "
-          f"{len(compliance_docs)} compliance requirements")
+    log.info("rag.seeded", benchmarks=len(benchmark_docs),
+             compliance_requirements=len(compliance_docs))
 
 
 # Run seeding at import time
@@ -248,7 +251,7 @@ def retrieve_context(
                 f"INDUSTRY BENCHMARKS ({industry}):\n{docs[0]}"
             )
     except Exception as e:
-        print(f"  ⚠ RAG benchmark retrieval failed: {e}")
+        log.warning("rag.retrieval_failed", collection="industry_benchmarks", error=str(e))
 
     # 2. Compliance requirements (especially useful for compliance agent)
     if domain in ("compliance", "financial", "strategic"):
@@ -263,7 +266,7 @@ def retrieve_context(
                     f"COMPLIANCE REQUIREMENTS ({industry}):\n{docs[0]}"
                 )
         except Exception as e:
-            print(f"  ⚠ RAG compliance retrieval failed: {e}")
+            log.warning("rag.retrieval_failed", collection="compliance_requirements", error=str(e))
 
     # 3. Past evaluations of OTHER vendors (only if we have some)
     #    The query used to include the vendor's own name, so its own previous
@@ -290,7 +293,7 @@ def retrieve_context(
                     )
                 context_parts.append("\n".join(past_lines))
         except Exception as e:
-            print(f"  ⚠ RAG past evaluation retrieval failed: {e}")
+            log.warning("rag.retrieval_failed", collection="vendor_evaluations", error=str(e))
 
     if not context_parts:
         return ""
@@ -342,9 +345,9 @@ Summary: {result.get("final_explanation", "")[:400]}
             documents=[document],
             metadatas=[metadata],
         )
-        print(f"  ✅ RAG: stored evaluation for {vendor_name}")
+        log.info("rag.evaluation_stored", vendor=vendor_name)
     except Exception as e:
-        print(f"  ⚠ RAG: failed to store: {e}")
+        log.warning("rag.store_failed", vendor=vendor_name, error=str(e))
 
 
 def get_collection_stats() -> dict:

@@ -20,7 +20,10 @@ import json
 import re
 
 from app.llm.config import get_llm
+from app.log import get_logger
 from langchain_core.messages import SystemMessage, HumanMessage
+
+log = get_logger(__name__)
 
 BATCH_SIZE = 2
 MAX_CHARS_PER_PAGE = 2000
@@ -178,19 +181,17 @@ async def _extract_batch(batch: list[dict], attempt_label: str = "") -> dict:
                 raise
             wait = _parse_wait_seconds(error_str)
             if wait >= MAX_RETRY_WAIT_S:
-                print(
-                    f"  → Daily token limit reached (Groq says wait {wait:.0f}s). "
-                    f"Returning empty — run again after limit resets."
-                )
+                log.warning("cert_extraction.daily_limit", wait_s=round(wait),
+                            batch=attempt_label.strip(" ()") or None,
+                            result="empty")
                 return _empty_result()
             wait = max(wait, 3.0) + 1
-            print(
-                f"  → Rate limit hit{attempt_label}, "
-                f"waiting {wait:.0f}s (attempt {attempt + 1}/3)..."
-            )
+            log.warning("cert_extraction.rate_limited", wait_s=round(wait),
+                        batch=attempt_label.strip(" ()") or None, attempt=attempt + 1)
             await asyncio.sleep(wait)
 
-    print("  → All retries exhausted — returning empty for this batch")
+    log.warning("cert_extraction.retries_exhausted",
+                batch=attempt_label.strip(" ()") or None, result="empty")
     return _empty_result()
 
 
@@ -224,7 +225,8 @@ async def extract_certifications(pages: list[dict]) -> dict:
     for i in range(0, len(pages), BATCH_SIZE):
         batch = pages[i : i + BATCH_SIZE]
         label = f" (batch {i // BATCH_SIZE + 1}/{total_batches})"
-        print(f"  → Extracting certs from pages {i+1}–{min(i+BATCH_SIZE, len(pages))}")
+        log.info("cert_extraction.batch_started", batch=i // BATCH_SIZE + 1,
+                 batches=total_batches, pages=f"{i + 1}-{min(i + BATCH_SIZE, len(pages))}")
         result = await _extract_batch(batch, attempt_label=label)
         batch_results.append(result)
         if i + BATCH_SIZE < len(pages):

@@ -9,6 +9,8 @@ dependency (scrapers, cert discovery, agents, RAG, sleeps) faked.
 """
 
 import asyncio
+import io
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -20,6 +22,8 @@ import main_api
 from app.api import routes
 from app.db.database import get_db
 from app.db.models import CertCache, Evaluation, Job
+from app.log import configure_logging, get_logger
+from app.settings import settings
 from conftest import install_fake_redis, make_sessionmaker
 
 app = main_api.app
@@ -597,6 +601,44 @@ def test_pipeline_exception_marks_job_failed(pipeline, monkeypatch):
     assert job.status == "failed"
     assert job.error == "RuntimeError: yfinance exploded"
     assert job.current_step == "Pipeline failed"
+
+
+@pytest.fixture
+def log_lines():
+    """Capture JSON log lines at DEBUG for the duration of a test."""
+    buf = io.StringIO()
+    configure_logging("DEBUG", "json", stream=buf)
+    yield lambda: [json.loads(x) for x in buf.getvalue().splitlines() if x.strip()]
+    configure_logging(settings.log_level, settings.log_format)
+
+
+def test_pipeline_binds_job_id_and_vendor_to_every_log_line(pipeline, log_lines):
+    pipeline.run(job_id="job-log", vendor="Okta")
+    lines = [x for x in log_lines() if x["logger"].startswith("app.")]
+    events = [x["event"] for x in lines]
+    assert events[0] == "job.started" and "job.completed" in events
+    assert {(x.get("job_id"), x.get("vendor")) for x in lines} == {("job-log", "Okta")}
+
+    [done] = [x for x in lines if x["event"] == "job.completed"]
+    assert (done["recommendation"], done["level"]) == ("APPROVE", "info")
+
+
+def test_pipeline_job_context_is_unbound_afterwards(pipeline, log_lines):
+    pipeline.run(job_id="job-after")
+    get_logger("app.test").info("after")
+    [after] = [x for x in log_lines() if x["event"] == "after"]
+    assert "job_id" not in after and "vendor" not in after
+
+
+def test_pipeline_failure_is_logged_with_traceback(pipeline, monkeypatch, log_lines):
+    def boom(name):
+        raise RuntimeError("yfinance exploded")
+    monkeypatch.setattr(routes, "scrape_vendor_financials", boom)
+    pipeline.run(job_id="job-err")
+    [failed] = [x for x in log_lines() if x["event"] == "job.failed"]
+    assert failed["level"] == "error" and failed["job_id"] == "job-err"
+    assert failed["error"] == "RuntimeError: yfinance exploded"
+    assert "Traceback" in failed["exception"]
 
 
 def test_pipeline_injects_rag_context_per_agent(pipeline):

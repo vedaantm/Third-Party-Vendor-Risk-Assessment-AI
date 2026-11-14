@@ -26,7 +26,10 @@ import time
 
 import requests
 
+from app.log import get_logger
 from app.services.name_matching import core_tokens, tokens_overlap
+
+log = get_logger(__name__)
 
 SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.csv"
 ALT_URL = "https://www.treasury.gov/ofac/downloads/alt.csv"
@@ -137,12 +140,12 @@ def _load_sdn_entries() -> list[dict] | None:
         if not entries:
             raise ValueError("SDN list parsed to zero entries")
         _sdn_cache, _sdn_loaded_at = entries, time.time()
-        print(f"  ✅ OFAC SDN list loaded: {len(entries)} entries")
+        log.info("ofac.list_loaded", entries=len(entries))
     except Exception as e:
-        print(f"  ⚠️  OFAC SDN list download failed: {e}")
+        log.warning("ofac.list_download_failed", error=str(e))
         if _sdn_cache is None:
             return None
-        print("  → Using previously loaded SDN list")
+        log.warning("ofac.using_previous_list")
 
     return _sdn_cache
 
@@ -199,7 +202,8 @@ def check_ofac(company_name: str) -> dict:
     result = screen_name(company_name, _load_sdn_entries())
     status = result["ofac_status"]
     if status == "clear":
-        print(f"  ✅ OFAC: {company_name} — no SDN match")
+        log.info("ofac.screened", vendor=company_name, status=status)
     else:
-        print(f"  ⚠️  OFAC: {company_name} — {status} {result['ofac_matches']}")
+        log.warning("ofac.screened", vendor=company_name, status=status,
+                    matches=result["ofac_matches"])
     return result

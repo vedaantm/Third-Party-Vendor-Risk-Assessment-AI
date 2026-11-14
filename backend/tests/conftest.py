@@ -59,6 +59,8 @@ TEST_ENV = {
     "CERT_CACHE_VALID_AFTER": "",                 # blank → no cutoff
     "CSA_STAR_API_KEY": "",
     "DATABASE_SSL": "require",                    # the production default
+    "LOG_LEVEL": "WARNING",                       # quiet test output
+    "LOG_FORMAT": "json",
 }
 os.environ.update(TEST_ENV)
 
@@ -133,6 +135,7 @@ def real_groq_key(monkeypatch):
     if not REAL_GROQ_API_KEY:
         pytest.skip("no real GROQ_API_KEY in the environment or backend/.env")
     from pydantic import SecretStr
+
     from app.settings import settings
     monkeypatch.setattr(settings, "groq_api_key", SecretStr(REAL_GROQ_API_KEY))
 
@@ -143,6 +146,7 @@ def install_fake_redis(monkeypatch, client=None):
     the loop they are first used on.
     """
     import fakeredis
+
     from app.services import cache
 
     client = client or fakeredis.FakeAsyncRedis(decode_responses=True)
@@ -166,8 +170,9 @@ async def make_sessionmaker(db_url: str):
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import NullPool
+
+    import app.db.models  # register tables
     from app.db.database import Base
-    import app.db.models  # noqa: F401 — register tables
 
     engine = create_async_engine(db_url, poolclass=NullPool)
     async with engine.begin() as conn:

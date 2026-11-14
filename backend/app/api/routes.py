@@ -43,11 +43,13 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
+import structlog
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, update
 
 from app.db.database import get_db, AsyncSessionLocal
+from app.log import get_logger
 from app.settings import settings
 from app.db.models import Evaluation, CertCache, Job
 from app.agents.financial_agent   import run_financial_agent
@@ -67,6 +69,7 @@ from app.services.cache import (
 )
 
 router = APIRouter()
+log = get_logger(__name__)
 
 
 # ─── Request Models ───────────────────────────────────────────────────────────
@@ -188,15 +191,15 @@ async def _read_cert_cache(vendor_name: str, db: AsyncSession) -> dict | None:
 
     cached_at = row.cached_at.replace(tzinfo=timezone.utc)
     if CERT_CACHE_VALID_AFTER and cached_at < CERT_CACHE_VALID_AFTER:
-        print(f"  → Cert cache for '{vendor_name}' predates CERT_CACHE_VALID_AFTER — re-running")
+        log.info("cert_cache.stale", vendor=vendor_name, reason="before_valid_after")
         return None
 
     age = datetime.now(timezone.utc) - cached_at
     if age > timedelta(days=CERT_CACHE_TTL_DAYS):
-        print(f"  → Cert cache expired for '{vendor_name}' ({age.days} days old) — re-running")
+        log.info("cert_cache.expired", vendor=vendor_name, age_days=age.days)
         return None
 
-    print(f"  → Supabase cert cache HIT for '{vendor_name}' (cached {age.days}d ago)")
+    log.info("cert_cache.db_hit", vendor=vendor_name, age_days=age.days)
 
     # Found in Supabase — warm the Redis cache for next time
     cert_data = {
@@ -246,7 +249,7 @@ async def _write_cert_cache(vendor_name: str, cert_result: dict, db: AsyncSessio
         ))
 
     await db.flush()
-    print(f"  → Cert cache written (Redis + Supabase) for '{vendor_name}'")
+    log.info("cert_cache.written", vendor=vendor_name)
 
 
 # ─── Job Status Helpers ───────────────────────────────────────────────────────
@@ -312,8 +315,8 @@ async def _run_agent_with_retry(fn, state: dict, name: str, max_retries: int = 3
                     wait = (2 ** attempt) * 3   # Fallback: 3, 6, 12 seconds
 
                 wait = min(wait, 60)   # Never wait more than 60s per retry
-                print(f"  → [{name}] rate limit, waiting {wait:.1f}s "
-                      f"(attempt {attempt + 1}/{max_retries})")
+                log.warning("agent.rate_limited", agent=name, wait_s=round(wait, 1),
+                            attempt=attempt + 1, max_attempts=max_retries)
                 await asyncio.sleep(wait)
             else:
                 raise
@@ -322,6 +325,20 @@ async def _run_agent_with_retry(fn, state: dict, name: str, max_retries: int = 3
 # ─── The Evaluation Pipeline (Background Task) ────────────────────────────────
 
 async def _run_evaluation_pipeline(
+    job_id:        str,
+    vendor_name:   str,
+    client_profile: dict,
+    weights:       dict,
+    evaluation_id: str,
+) -> None:
+    """Runs the pipeline with job_id and vendor bound to every log line."""
+    with structlog.contextvars.bound_contextvars(job_id=job_id, vendor=vendor_name):
+        log.info("job.started")
+        await _run_pipeline_steps(job_id, vendor_name, client_profile,
+                                  weights, evaluation_id)
+
+
+async def _run_pipeline_steps(
     job_id:        str,
     vendor_name:   str,
     client_profile: dict,
@@ -386,7 +403,7 @@ async def _run_evaluation_pipeline(
                 if meaningful:
                     await _write_cert_cache(vendor_name, cert_discovery, db)
                 else:
-                    print("  → Skipping cache write — results too thin (rate limit likely hit)")
+                    log.info("cert_cache.write_skipped", vendor=vendor_name, reason="thin_results")
 
             # Merge cert discovery results into compliance_data
             compliance_data["certifications_found"]            = cert_discovery.get("certifications_found", [])
@@ -452,7 +469,7 @@ async def _run_evaluation_pipeline(
 
             # ── Step 4: Run specialist agents ─────────────────────────────────
             # Brief cooldown before agents to let cert extraction window clear
-            print("  → Cooling down before agents (15s)...")
+            log.info("pipeline.cooldown", seconds=15)
             await asyncio.sleep(15)
 
             agent_map = {
@@ -496,14 +513,14 @@ async def _run_evaluation_pipeline(
                     )
                     if rag_context:
                         state[f"{name}_data"]["rag_context"] = rag_context
-                        print(f"  ✅ RAG: injected {name} context")
+                        log.info("rag.context_injected", agent=name)
 
                     result = await _run_agent_with_retry(fn, state, name)
                     state[output_key_map[name]] = result
                     agent_results[name]         = result
 
                 except Exception as e:
-                    print(f"[WARNING] {name} agent failed: {e}")
+                    log.warning("agent.failed", agent=name, error=str(e), exc_info=True)
                     state[output_key_map[name]] = None
                     agent_results[name]         = None
 
@@ -596,13 +613,14 @@ async def _run_evaluation_pipeline(
                               result=response_data)
 
             await db.commit()
-            print(f"  ✅ Job {job_id} complete: {meta_result.get('final_recommendation')} "
-                  f"({meta_result.get('composite_score')}/100)")
+            log.info("job.completed",
+                     recommendation=meta_result.get("final_recommendation"),
+                     composite_score=meta_result.get("composite_score"))
 
         except Exception as e:
             # Record failure — never silently lose work
             error_msg = f"{type(e).__name__}: {str(e)}"
-            print(f"[ERROR] Job {job_id} failed: {error_msg}")
+            log.exception("job.failed", error=error_msg)
 
             try:
                 await _update_job(job_id, db,
@@ -611,7 +629,7 @@ async def _run_evaluation_pipeline(
                                   error=error_msg)
                 await db.commit()
             except Exception as inner_e:
-                print(f"[ERROR] Could not update job failure status: {inner_e}")
+                log.exception("job.failure_not_recorded", error=str(inner_e))
 
 
 # ─── POST /evaluate — Returns 202 Immediately ────────────────────────────────

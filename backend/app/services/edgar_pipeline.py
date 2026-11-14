@@ -16,8 +16,11 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
+from app.log import get_logger
 from app.services.name_matching import names_match
 from app.services.scraper import _find_ticker
+
+log = get_logger(__name__)
 
 EDGAR_HEADERS = {"User-Agent": "VendorRiskPlatform research-contact@example.com"}
 
@@ -75,7 +78,7 @@ def _load_ticker_cik_map() -> dict:
             for entry in data.values()
         }
     except Exception as e:
-        print(f"  → EDGAR ticker map load failed: {e}")
+        log.warning("edgar.ticker_map_failed", error=str(e))
         _ticker_cik_cache = {}
     return _ticker_cik_cache
 
@@ -94,7 +97,7 @@ def _resolve_cik_by_name(company_name: str) -> str | None:
         match = re.search(r"CIK=(\d{10})", resp.text)
         return match.group(1) if match else None
     except Exception as e:
-        print(f"  → EDGAR name search failed: {e}")
+        log.warning("edgar.name_search_failed", vendor=company_name, error=str(e))
         return None
 
 
@@ -113,10 +116,10 @@ def _fetch_and_validate_submissions(cik: str, company_name: str) -> tuple[str | 
         registered_name = data.get("name", "")
 
         if not names_match(company_name, registered_name):
-            print(f"  → CIK {cik} name mismatch: '{registered_name}' ≠ '{company_name}' — rejecting")
+            log.info("edgar.cik_rejected", cik=cik, registered_name=registered_name, vendor=company_name)
             return None, None
 
-        print(f"  → CIK {cik} validated: '{registered_name}'")
+        log.info("edgar.cik_validated", cik=cik, registered_name=registered_name)
 
         recent = data.get("filings", {}).get("recent", {})
         forms = recent.get("form", [])
@@ -136,7 +139,7 @@ def _fetch_and_validate_submissions(cik: str, company_name: str) -> tuple[str | 
         return registered_name, None
 
     except Exception as e:
-        print(f"  → EDGAR submissions fetch failed: {e}")
+        log.warning("edgar.submissions_failed", cik=cik, error=str(e))
         return None, None
 
 
@@ -162,7 +165,7 @@ def _resolve_cik(
         name, filing = _fetch_and_validate_submissions(candidate_cik, company_name)
         if name:
             return candidate_cik, name, filing
-        print(f"  → Ticker CIK failed name validation, trying name search")
+        log.info("edgar.ticker_cik_rejected", vendor=company_name, fallback="name_search")
 
     name_cik = _resolve_cik_by_name(company_name)
     if name_cik and name_cik != candidate_cik:
@@ -230,21 +233,21 @@ async def discover_certifications_from_edgar(
     cik, registered_name, filing = _resolve_cik(company_name, ticker_symbol)
 
     if not cik:
-        print(f"  → No validated SEC CIK found for '{company_name}'")
+        log.info("edgar.no_cik", vendor=company_name)
         return empty
 
-    print(f"  → Resolved CIK: {cik} ({registered_name})")
+    log.info("edgar.cik_resolved", vendor=company_name, cik=cik, registered_name=registered_name)
 
     if not filing:
-        print(f"  → No 10-K/20-F found for CIK {cik}")
+        log.info("edgar.no_annual_filing", cik=cik)
         return {**empty, "edgar_cik": cik}
 
-    print(f"  → Using {filing['form']} filed {filing['filing_date']}: {filing['url']}")
+    log.info("edgar.filing_selected", form=filing["form"], filed=filing["filing_date"], url=filing["url"])
     full_text = _fetch_filing_text(filing["url"])
     relevant_text = _extract_relevant_windows(full_text)
 
     if not relevant_text:
-        print("  → Filing had no recognizable compliance-term mentions")
+        log.info("edgar.no_compliance_terms", url=filing["url"])
         return {
             **empty,
             "sources_checked": [filing["url"]],
