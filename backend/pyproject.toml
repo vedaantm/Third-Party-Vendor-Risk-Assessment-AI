@@ -21,6 +21,7 @@ dependencies = [
     "chromadb==1.0.20",
     "pypdf==6.9.2",
     "ddgs==9.14.4",
+    "pydantic-settings==2.15.0",
 ]
 
 [dependency-groups]

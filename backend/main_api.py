@@ -1,7 +1,6 @@
 # backend/main_api.py
 
 import math
-import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -10,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.db.database import engine, Base
+from app.settings import settings
 from app.api.routes import router
 
 
@@ -51,7 +51,7 @@ def _cors_origins(raw: str | None) -> list[str]:
 # CORS — only the configured frontend origins (previously "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins(os.environ.get("CORS_ALLOW_ORIGINS")),
+    allow_origins=_cors_origins(settings.cors_allow_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )

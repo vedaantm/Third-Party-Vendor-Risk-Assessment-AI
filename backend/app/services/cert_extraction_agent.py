@@ -19,7 +19,7 @@ import asyncio
 import json
 import re
 
-from app.config_watsonx import get_llm
+from app.llm.config import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
 
 BATCH_SIZE = 2

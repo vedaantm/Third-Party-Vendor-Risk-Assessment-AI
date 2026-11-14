@@ -16,15 +16,10 @@ from pathlib import Path
 import pytest
 
 # ── Environment — must be set before any `app.*` import ───────────────────
-os.environ.setdefault("GROQ_API_KEY", "test-key-not-used")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
-
-# app.db.database calls load_dotenv(override=True), so backend/.env (if
-# present) replaces DATABASE_URL, CHROMA_PATH, REDIS_URL... Import it now, then
-# force the values tests depend on. The real DATABASE_URL may remain in the
-# environment, but no test uses the real engine — get_db and the pipeline's
-# session factory are replaced, and the network guard below blocks it.
-import app.db.database  # noqa: E402,F401
+# app.settings reads real environment variables before backend/.env, so
+# setting EVERY Settings field here means no value from your .env — not the
+# real DATABASE_URL, not the real CHROMA_PATH — ever reaches a test.
+# tests/test_settings.py checks this list covers every field.
 
 def _fresh_test_chroma_dir() -> str:
     """
@@ -42,10 +37,29 @@ def _fresh_test_chroma_dir() -> str:
 
 
 _TEST_CHROMA = _fresh_test_chroma_dir()
-os.environ["CHROMA_PATH"] = _TEST_CHROMA
-os.environ.pop("CERT_CACHE_VALID_AFTER", None)
-os.environ.pop("CORS_ALLOW_ORIGINS", None)          # tests assert the default
-os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"   # nothing listens on port 1
+
+
+def _real_groq_key() -> str | None:
+    """For live tests only: a real key from the shell (e.g. CI) or backend/.env."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        from dotenv import dotenv_values
+        key = dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("GROQ_API_KEY")
+    return key if key and not key.startswith("test-key") else None
+
+
+REAL_GROQ_API_KEY = _real_groq_key()   # captured before TEST_ENV overwrites it
+
+TEST_ENV = {
+    "GROQ_API_KEY": "test-key-not-used",          # live tests swap in the real key
+    "DATABASE_URL": "postgresql+asyncpg://test:test@127.0.0.1:1/test",
+    "REDIS_URL": "redis://127.0.0.1:1/0",         # nothing listens on port 1
+    "CHROMA_PATH": _TEST_CHROMA,
+    "CORS_ALLOW_ORIGINS": "",                     # blank → default; tests assert it
+    "CERT_CACHE_VALID_AFTER": "",                 # blank → no cutoff
+    "CSA_STAR_API_KEY": "",
+}
+os.environ.update(TEST_ENV)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -110,6 +124,16 @@ def _redis_down_by_default(monkeypatch):
     # Never reconnect on its own — REDIS_URL from backend/.env may point at a
     # real local Redis, which the loopback-only network guard would allow.
     monkeypatch.setattr(cache, "_redis_retry_at", float("inf"))
+
+
+@pytest.fixture
+def real_groq_key(monkeypatch):
+    """Live tests: point settings at the real Groq key, or skip without one."""
+    if not REAL_GROQ_API_KEY:
+        pytest.skip("no real GROQ_API_KEY in the environment or backend/.env")
+    from pydantic import SecretStr
+    from app.settings import settings
+    monkeypatch.setattr(settings, "groq_api_key", SecretStr(REAL_GROQ_API_KEY))
 
 
 def install_fake_redis(monkeypatch, client=None):

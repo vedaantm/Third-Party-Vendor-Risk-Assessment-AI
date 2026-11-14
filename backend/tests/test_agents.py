@@ -8,7 +8,6 @@ without calling Groq. Live tests call Groq for real.
 """
 
 import asyncio
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -411,9 +410,7 @@ def test_financial_scoring_prompt_includes_real_credit_rating(fake_llm):
 
 @pytest.mark.live
 @pytest.mark.parametrize("name, run_agent, system_prompt", AGENT_CASES, ids=AGENT_IDS)
-def test_live_agent_output_passes_validation(name, run_agent, system_prompt):
-    if os.environ.get("GROQ_API_KEY", "").startswith("test-key"):
-        pytest.skip("GROQ_API_KEY not configured")
+def test_live_agent_output_passes_validation(real_groq_key, name, run_agent, system_prompt):
     result = asyncio.run(run_agent(make_state()))
     assert 0 <= result["score"] <= 100
     assert 0 <= result["confidence"] <= 1

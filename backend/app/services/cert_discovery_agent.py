@@ -7,7 +7,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-from app.config_watsonx import get_llm
+from app.llm.config import get_llm
 
 HEADERS = {"User-Agent": (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

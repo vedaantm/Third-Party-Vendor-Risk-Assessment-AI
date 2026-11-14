@@ -3,7 +3,7 @@ import math
 import re
 from abc import ABC, abstractmethod
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config_watsonx import get_llm, PRIMARY_MODEL
+from app.llm.config import get_llm, PRIMARY_MODEL
 from app.orchestrator.state import VendorRiskState
 
 

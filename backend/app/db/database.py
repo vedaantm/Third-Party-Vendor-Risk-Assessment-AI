@@ -1,12 +1,10 @@
 # backend/app/db/database.py
-import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from dotenv import load_dotenv
 
-load_dotenv(override=True)
+from app.settings import settings
 
-_raw_url = os.environ["DATABASE_URL"]
+_raw_url = settings.database_url.get_secret_value()
 
 # asyncpg through SQLAlchemy requires ssl passed as connect_args,
 # not as a query parameter — strip it from the URL if present.
