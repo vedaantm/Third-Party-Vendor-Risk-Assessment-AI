@@ -40,7 +40,10 @@ an existing database, and the app would fail at the first query that used it.
 - Every model change now needs a migration
   (`uv run alembic revision --autogenerate -m "..."`, then review it); the test
   suite fails until there is one.
-- Migrations are verified against SQLite and rendered for PostgreSQL offline
-  (`alembic upgrade head --sql`), not yet executed on PostgreSQL. Phase 0
-  item 5 adds a local Postgres container; the migration tests should run
-  against it then.
+- Migrations are tested against SQLite on every run, and against real
+  PostgreSQL with `make test-postgres` (the local docker-compose Postgres,
+  Phase 0 item 5), which CI should also run once it exists.
+- Running `alembic check` against Supabase before stamping found one drift:
+  `evaluations.agent_outputs` had been changed to JSONB by hand. The model
+  and baseline now declare JSONB on Postgres, and Supabase was stamped at
+  0001 after `alembic check` came back clean.
