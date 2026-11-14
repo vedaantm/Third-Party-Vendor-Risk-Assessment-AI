@@ -159,3 +159,18 @@ def test_stamped_create_all_database_checks_clean(db):
     command.check(cfg)
     command.upgrade(cfg, "head")   # already at head: a no-op, not an error
 
+
+# ── Startup no longer creates tables ──────────────────────
+
+def test_app_startup_does_not_create_tables(db, monkeypatch):
+    import main_api
+    from app.db.database import build_engine
+
+    engine = build_engine(f"sqlite+aiosqlite:///{db.as_posix()}")
+    monkeypatch.setattr(main_api, "engine", engine)
+
+    async def start_and_stop():
+        async with main_api.lifespan(main_api.app):
+            pass
+    asyncio.run(start_and_stop())
+    assert schema(db) == {}
