@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # TLS to Postgres: Supabase requires it; the local docker-compose
     # Postgres has no certificate, so the stack sets DATABASE_SSL=disable.
     database_ssl: Literal["require", "disable"] = "require"
+    # Logging: one JSON object per line by default; "console" is easier to
+    # read during local development.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_format: Literal["json", "console"] = "json"
     redis_url: str = "redis://localhost:6379"
     chroma_path: str = "./chroma_db"
     # Comma-separated; parsed by main_api._cors_origins (blank → default origin)

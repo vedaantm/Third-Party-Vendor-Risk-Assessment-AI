@@ -23,6 +23,7 @@ dependencies = [
     "ddgs==9.14.4",
     "pydantic-settings==2.15.0",
     "alembic==1.20.1",
+    "structlog==26.1.0",
 ]
 
 [dependency-groups]
