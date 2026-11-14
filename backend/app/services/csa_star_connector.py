@@ -19,10 +19,10 @@ TIER MAPPING:
   Level 1: SelfAssessment                     → CORROBORATED
 """
 
-import os
 import requests
 
 from app.services.name_matching import names_match
+from app.settings import settings
 
 DEMO_MODE = True
 CSA_BASE = "https://star.watch/api/v1/registry"
@@ -77,7 +77,8 @@ _org_cache: list | None = None
 
 
 def _live_headers() -> dict | None:
-    key = os.environ.get("CSA_STAR_API_KEY", "").strip()
+    secret = settings.csa_star_api_key
+    key = secret.get_secret_value().strip() if secret else ""
     if not key:
         return None
     return {"Authorization": f"Bearer {key}"}

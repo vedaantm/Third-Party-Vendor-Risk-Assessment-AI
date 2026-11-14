@@ -1,16 +1,14 @@
 # backend/app/services/rag_service.py
 
-import os
 import sys
 from pathlib import Path
 
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.settings import settings
 
-CHROMA_PATH = os.environ.get("CHROMA_PATH", "./chroma_db")
+CHROMA_PATH = settings.chroma_path
 
 # The production vector store, relative to this file (backend/chroma_db).
 REAL_CHROMA_DIR = Path(__file__).resolve().parents[2] / "chroma_db"

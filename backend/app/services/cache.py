@@ -34,10 +34,11 @@ GRACEFUL DEGRADATION:
 """
 
 import json
-import os
 import asyncio
 import time
 from typing import Any
+
+from app.settings import settings
 from datetime import timedelta
 
 # We import redis lazily so the app starts even if redis is not installed
@@ -65,7 +66,7 @@ async def _get_redis():
     if _redis_available is False and time.monotonic() < _redis_retry_at:
         return None   # Down recently — don't retry on every call
 
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    redis_url = settings.redis_url
 
     try:
         import redis.asyncio as aioredis

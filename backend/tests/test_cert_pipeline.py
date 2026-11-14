@@ -20,6 +20,8 @@ from app.services import (
     fedramp_connector,
 )
 from app.services.name_matching import core_tokens, names_exact, names_match, names_overlap
+from app.settings import settings
+from pydantic import SecretStr
 
 
 class FakeHTTP:
@@ -274,7 +276,7 @@ def test_csa_star_seed_no_false_positives(vendor):
 def csa_live(monkeypatch):
     monkeypatch.setattr(csa_star_connector, "DEMO_MODE", False)
     monkeypatch.setattr(csa_star_connector, "_org_cache", None)
-    monkeypatch.setenv("CSA_STAR_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "csa_star_api_key", SecretStr("test-key"))
 
 
 def csa_http(entry_type):
@@ -296,7 +298,7 @@ def test_csa_star_live_api_tiers(monkeypatch, csa_live, entry_type, tier):
 
 
 def test_csa_star_live_without_key_returns_empty(monkeypatch, csa_live):
-    monkeypatch.delenv("CSA_STAR_API_KEY")
+    monkeypatch.setattr(settings, "csa_star_api_key", None)
     assert csa_star_connector.check_csa_star("Okta")["csa_star_found"] is False
 
 
