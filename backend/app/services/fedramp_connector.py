@@ -19,7 +19,10 @@ Designation tiers:
 
 import requests
 
+from app.log import get_logger
 from app.services.name_matching import names_match
+
+log = get_logger(__name__)
 
 FEDRAMP_DATA_URL = (
     "https://raw.githubusercontent.com/"
@@ -36,9 +39,9 @@ def _load_fedramp_data() -> list:
     try:
         resp = requests.get(FEDRAMP_DATA_URL, timeout=15)
         _fedramp_cache = resp.json().get("data", {}).get("Providers", [])
-        print(f"  → FedRAMP data loaded: {len(_fedramp_cache)} entries")
+        log.info("fedramp.data_loaded", entries=len(_fedramp_cache))
     except Exception as e:
-        print(f"  → FedRAMP data load failed: {e}")
+        log.warning("fedramp.data_load_failed", error=str(e))
         _fedramp_cache = []
     return _fedramp_cache
 
@@ -64,7 +67,7 @@ def check_fedramp(company_name: str) -> dict:
             matches.append(entry)
 
     if not matches:
-        print(f"  → {company_name} not found in FedRAMP data")
+        log.info("fedramp.checked", vendor=company_name, found=False)
         return empty
 
     authorized = [
@@ -106,7 +109,7 @@ def check_fedramp(company_name: str) -> dict:
     else:
         return empty
 
-    print(f"  → FedRAMP result: {tier}")
+    log.info("fedramp.checked", vendor=company_name, found=True, tier=tier)
     return {
         "fedramp_tier": tier,
         "fedramp_evidence": evidence,

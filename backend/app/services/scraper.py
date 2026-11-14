@@ -1,11 +1,15 @@
 import re
 import urllib.parse
+from datetime import datetime
+
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
-from datetime import datetime
 
+from app.log import get_logger
 from app.services.ofac_screening import check_ofac
+
+log = get_logger(__name__)
 
 # ── Industry classification ────────────────────────────────────────────────
 
@@ -125,14 +129,14 @@ def _classify_industry_fallback(company_name: str) -> str | None:
 
         best = max(scores, key=scores.get)
         if scores[best] > 0:
-            print(f"  ✅ Industry classified (search fallback): {best} "
-                  f"(score={scores[best]})")
+            log.info("scraper.industry_classified", vendor=company_name, industry=best,
+                     score=scores[best], method="search_fallback")
             return best
 
         return None
 
     except Exception as e:
-        print(f"  → Industry classification fallback failed: {e}")
+        log.warning("scraper.industry_classification_failed", vendor=company_name, error=str(e))
         return None
 
 # ══════════════════════════════════════════════════════════
@@ -140,7 +144,7 @@ def _classify_industry_fallback(company_name: str) -> str | None:
 # ══════════════════════════════════════════════════════════
 
 def scrape_vendor_financials(company_name: str) -> dict:
-    print(f"\n  → Scraping data for: {company_name}")
+    log.info("scraper.financials_started", vendor=company_name)
     data    = {}
     sources = {}
 
@@ -154,20 +158,20 @@ def scrape_vendor_financials(company_name: str) -> dict:
             raw = data["industry"]
             data["industry"] = _normalize_yfinance_industry(raw)
             if data["industry"] != raw:
-                print(f"  ✅ Industry normalized: '{raw}' → '{data['industry']}'")
+                log.info("scraper.industry_normalized", raw=raw, industry=data["industry"])
 
     years = _scrape_years_from_wikipedia(company_name)
     if years:
         data["years_in_operation"]    = years
         sources["years_in_operation"] = "Wikipedia"
-        print(f"  ✅ Years in operation from Wikipedia: {years}")
+        log.info("scraper.years_found", years=years, source="wikipedia")
 
     revenue = _scrape_revenue_macrotrends(company_name)
     if revenue:
         data.update(revenue)
         for key in revenue:
             sources[key] = "Macrotrends"
-        print(f"  ✅ Revenue history from Macrotrends: {list(revenue.keys())}")
+        log.info("scraper.revenue_found", fields=list(revenue.keys()), source="macrotrends")
 
     # Fallback: classify industry for private companies where yfinance
     # returned no industry. Without this, routes.py falls back to the
@@ -179,12 +183,12 @@ def scrape_vendor_financials(company_name: str) -> dict:
             sources["industry"] = "search-based classification (private company)"
 
     data["_sources"] = sources
-    print(f"\n  → Final scraped fields: {list(data.keys())}")
+    log.info("scraper.financials_done", vendor=company_name, fields=list(data.keys()))
     return data
 
 
 def scrape_vendor_compliance(company_name: str, industry: str = None) -> dict:
-    print(f"\n  → Scraping compliance data for: {company_name}")
+    log.info("scraper.compliance_started", vendor=company_name)
     data = {}
 
     if industry:
@@ -198,12 +202,12 @@ def scrape_vendor_compliance(company_name: str, industry: str = None) -> dict:
     data.update(_scrape_legal_news(company_name))
     data["recent_news"] = scrape_vendor_news(company_name)
 
-    print(f"  → Compliance fields: {list(data.keys())}")
+    log.info("scraper.compliance_done", vendor=company_name, fields=list(data.keys()))
     return data
 
 
 def scrape_vendor_news(company_name: str, max_articles: int = 5) -> list:
-    print(f"\n  → Scraping news for: {company_name}")
+    log.info("scraper.news_started", vendor=company_name)
 
     try:
         query = company_name.replace(" ", "%20")
@@ -244,11 +248,11 @@ def scrape_vendor_news(company_name: str, max_articles: int = 5) -> list:
                 "date":    pubdate.get_text(strip=True) if pubdate else "",
             })
 
-        print(f"  ✅ Found {len(articles)} news articles")
+        log.info("scraper.news_found", articles=len(articles), source="google_news")
         return articles
 
     except Exception as e:
-        print(f"  → RSS error: {e}, trying fallback...")
+        log.warning("scraper.news_failed", source="google_news", error=str(e), fallback="bing")
         return _news_fallback(company_name, max_articles)
 
 
@@ -262,7 +266,7 @@ def _scrape_yfinance(company_name: str) -> dict:
         if not ticker_symbol:
             return {}
 
-        print(f"  ✅ Ticker found: {ticker_symbol} (yfinance)")
+        log.info("scraper.ticker_found", ticker=ticker_symbol)
         ticker = yf.Ticker(ticker_symbol)
         info   = ticker.info
 
@@ -276,7 +280,7 @@ def _scrape_yfinance(company_name: str) -> dict:
         name_tokens -= {"the", "inc", "ltd", "corp", "group", "company"}
         long_name_tokens = set(re.findall(r"[a-z]{3,}", long_name))
         if long_name and name_tokens and not (name_tokens & long_name_tokens):
-            print(f"  → Ticker mismatch: '{info.get('longName')}' ≠ '{company_name}' — skipping yfinance")
+            log.info("scraper.ticker_rejected", vendor=company_name, listed_name=info.get("longName"))
             return {}
 
         result = {
@@ -328,7 +332,7 @@ def _scrape_yfinance(company_name: str) -> dict:
         return {k: v for k, v in result.items() if v is not None}
 
     except Exception as e:
-        print(f"  → yfinance error: {e}")
+        log.warning("scraper.yfinance_failed", error=str(e))
         return {}
 
 
@@ -363,7 +367,7 @@ def _scrape_years_from_wikipedia(company_name: str) -> int:
         return None
 
     except Exception as e:
-        print(f"  → Wikipedia scrape error: {e}")
+        log.warning("scraper.wikipedia_failed", error=str(e))
         return None
 
 
@@ -401,7 +405,7 @@ def _scrape_revenue_macrotrends(company_name: str) -> dict:
         return data
 
     except Exception as e:
-        print(f"  → Macrotrends error: {e}")
+        log.warning("scraper.macrotrends_failed", error=str(e))
         return {}
 
 
@@ -449,13 +453,13 @@ def _scrape_certifications(company_name: str) -> dict:
             if keyword in text and cert not in certs_found:
                 certs_found.append(cert)
                 certs_sources[cert] = "Certipedia"
-                print(f"  ✅ {cert} found on Certipedia")
+                log.info("scraper.cert_found", cert=cert, source="certipedia")
     except Exception as e:
-        print(f"  → Certipedia error: {e}")
+        log.warning("scraper.certipedia_failed", error=str(e))
 
     # ── Source 2: DuckDuckGo → company's own compliance pages ──
     compliance_urls = _find_compliance_urls(company_name)
-    print(f"  → Checking {len(compliance_urls)} compliance pages...")
+    log.info("scraper.compliance_pages", pages=len(compliance_urls))
 
     for url in compliance_urls:
         try:
@@ -472,7 +476,7 @@ def _scrape_certifications(company_name: str) -> dict:
                     certs_sources[cert] = url
                     found_here.append(cert)
             if found_here:
-                print(f"  ✅ Found {found_here} at {url}")
+                log.info("scraper.cert_found", certs=found_here, url=url)
         except Exception:
             continue
 
@@ -488,11 +492,11 @@ def _scrape_certifications(company_name: str) -> dict:
             if keyword in text and cert not in certs_found:
                 certs_found.append(cert)
                 certs_sources[cert] = "BSI Group"
-                print(f"  ✅ {cert} found on BSI")
+                log.info("scraper.cert_found", cert=cert, source="bsi")
     except Exception as e:
-        print(f"  → BSI error: {e}")
+        log.warning("scraper.bsi_failed", error=str(e))
 
-    print(f"  → Total certifications found: {certs_found}")
+    log.info("scraper.certs_total", certs=certs_found)
     return {
         "certifications_found":   certs_found,
         "certifications_sources": certs_sources,
@@ -546,7 +550,7 @@ def _find_compliance_urls(company_name: str) -> list:
                     and href not in urls
                 ):
                     urls.append(href)
-                    print(f"  → Found: {href}")
+                    log.debug("scraper.compliance_url_found", url=href)
 
             # Extract from result__a tags (unwrap DuckDuckGo redirects)
             for a in soup.find_all("a", class_="result__a"):
@@ -565,13 +569,13 @@ def _find_compliance_urls(company_name: str) -> list:
                     and href not in urls
                 ):
                     urls.append(href)
-                    print(f"  → Found: {href}")
+                    log.debug("scraper.compliance_url_found", url=href)
 
             if len(urls) >= 3:
                 break
 
     except Exception as e:
-        print(f"  → DuckDuckGo error: {e}")
+        log.warning("scraper.duckduckgo_failed", error=str(e))
 
     return urls[:5]
 
@@ -625,11 +629,11 @@ def _news_fallback(company_name: str, max_articles: int = 5) -> list:
                     "date":    "",
                 })
 
-        print(f"  ✅ Fallback found {len(articles)} articles (Bing News)")
+        log.info("scraper.news_found", articles=len(articles), source="bing")
         return articles
 
     except Exception as e:
-        print(f"  → Fallback also failed: {e}")
+        log.warning("scraper.news_failed", source="bing", error=str(e))
         return []
 
 

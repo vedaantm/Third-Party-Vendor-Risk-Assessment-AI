@@ -7,18 +7,21 @@ Fix 1: Domain validation — validates resolved domain belongs to the company.
 Fix 4: PDF size cap — skips PDFs over 5MB.
 """
 
-import urllib.parse
 import re
+import urllib.parse
 from io import BytesIO
 
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
-from pypdf import PdfReader
 from ddgs import DDGS
+from pypdf import PdfReader
 
+from app.log import get_logger
 from app.services.cert_extraction_agent import extract_certifications
 from app.services.scraper import _find_ticker
+
+log = get_logger(__name__)
 
 HEADERS = {
     "User-Agent": (
@@ -80,7 +83,7 @@ def _get_company_domain(company_name: str) -> str | None:
             long_tokens = set(re.findall(r"[a-z]+", long_name.lower()))
             long_tokens -= DOMAIN_STOPWORDS
             if not (name_tokens & long_tokens):
-                print(f"  → yfinance name mismatch: '{long_name}' ≠ '{company_name}' — domain rejected")
+                log.info("cert_web.domain_rejected", vendor=company_name, reason="name_mismatch", listed_name=long_name)
                 return None
 
         website = info.get("website")
@@ -96,13 +99,13 @@ def _get_company_domain(company_name: str) -> str | None:
             if t not in DOMAIN_STOPWORDS
         }
         if meaningful_tokens and not any(t in domain_root for t in meaningful_tokens):
-            print(f"  → Domain '{domain}' doesn't match '{company_name}' — domain rejected")
+            log.info("cert_web.domain_rejected", vendor=company_name, reason="domain_mismatch", domain=domain)
             return None
 
         return domain
 
     except Exception as e:
-        print(f"  → domain lookup failed: {e}")
+        log.warning("cert_web.domain_lookup_failed", vendor=company_name, error=str(e))
         return None
 
 
@@ -117,7 +120,7 @@ def _search_web(query: str) -> list[str]:
         results = DDGS().text(query, max_results=10)
         return [r.get("href", "") for r in results if r.get("href", "").startswith("http")]
     except Exception as e:
-        print(f"  → search failed for '{query}': {e}")
+        log.warning("cert_web.search_failed", query=query, error=str(e))
         return []
 
 
@@ -134,7 +137,7 @@ def _fetch_page_text(url: str) -> str:
         resp = _session.get(url, timeout=15)
 
         if resp.status_code != 200:
-            print(f"  → skipped (status {resp.status_code}): {url}")
+            log.debug("cert_web.page_skipped", url=url, status=resp.status_code)
             return ""
 
         content_type = resp.headers.get("Content-Type", "")
@@ -144,15 +147,15 @@ def _fetch_page_text(url: str) -> str:
             # FIX 4: Skip oversized PDFs before parsing
             content_length = int(resp.headers.get("Content-Length", 0))
             if content_length > PDF_SIZE_LIMIT_BYTES:
-                print(f"  → skipped PDF (too large: {content_length/1024/1024:.1f}MB): {url}")
+                log.info("cert_web.pdf_skipped", url=url, reason="too_large", size_mb=round(content_length / 1024 / 1024, 1))
                 return ""
             if len(resp.content) > PDF_SIZE_LIMIT_BYTES:
-                print(f"  → skipped PDF (too large after fetch): {url}")
+                log.info("cert_web.pdf_skipped", url=url, reason="too_large_after_fetch")
                 return ""
             try:
                 return _extract_pdf_text(resp.content)
             except Exception as e:
-                print(f"  → PDF parse failed for {url}: {type(e).__name__}: {e}")
+                log.warning("cert_web.pdf_parse_failed", url=url, error=f"{type(e).__name__}: {e}")
                 return ""
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -161,7 +164,7 @@ def _fetch_page_text(url: str) -> str:
         return " ".join(soup.get_text(separator=" ").split())
 
     except Exception as e:
-        print(f"  → fetch failed for {url}: {type(e).__name__}: {e}")
+        log.warning("cert_web.fetch_failed", url=url, error=f"{type(e).__name__}: {e}")
         return ""
 
 
@@ -171,10 +174,10 @@ async def discover_and_extract_certifications(company_name: str) -> dict:
     candidate_urls = []
 
     if domain:
-        print(f"  → Resolved domain: {domain}")
+        log.info("cert_web.domain_resolved", vendor=company_name, domain=domain)
         templates = SITE_QUERIES_TEMPLATE
     else:
-        print("  → Could not resolve domain, falling back to keyword search")
+        log.info("cert_web.domain_unresolved", vendor=company_name, fallback="keyword_search")
         templates = FALLBACK_QUERIES_TEMPLATE
 
     for template in templates:
@@ -188,14 +191,14 @@ async def discover_and_extract_certifications(company_name: str) -> dict:
                 candidate_urls.append(url)
 
     candidate_urls = candidate_urls[:MAX_PAGES_TO_FETCH]
-    print(f"  → Found {len(candidate_urls)} candidate pages for {company_name}")
+    log.info("cert_web.candidates_found", vendor=company_name, pages=len(candidate_urls))
 
     pages = []
     for url in candidate_urls:
         text = _fetch_page_text(url)
         if text:
             pages.append({"url": url, "text": text})
-            print(f"  → Fetched: {url} ({len(text)} chars)")
+            log.debug("cert_web.page_fetched", url=url, chars=len(text))
 
     if not pages:
         return {

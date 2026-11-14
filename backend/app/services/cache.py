@@ -33,13 +33,16 @@ GRACEFUL DEGRADATION:
     Set REDIS_URL=redis://localhost:6379 in .env to enable.
 """
 
-import json
 import asyncio
+import json
 import time
+from datetime import timedelta
 from typing import Any
 
+from app.log import get_logger
 from app.settings import settings
-from datetime import timedelta
+
+log = get_logger(__name__)
 
 # We import redis lazily so the app starts even if redis is not installed
 _redis_client = None
@@ -51,6 +54,13 @@ _redis_available = None   # None = not checked yet, True/False = checked
 # connect timeout to every cache read while Redis is down.
 REDIS_RETRY_INTERVAL_SECONDS = 30.0
 _redis_retry_at = 0.0     # time.monotonic() after which a reconnect is allowed
+
+
+def _redis_host(url: str) -> str:
+    """host:port only — a Redis URL can carry a password."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    return f"{parts.hostname}:{parts.port or 6379}"
 
 
 async def _get_redis():
@@ -82,14 +92,14 @@ async def _get_redis():
 
         _redis_client   = client
         _redis_available = True
-        print(f"✅ Redis connected: {redis_url}")
+        log.info("redis.connected", host=_redis_host(redis_url))
         return client
 
     except Exception as e:
         _redis_available = False
         _redis_retry_at = time.monotonic() + REDIS_RETRY_INTERVAL_SECONDS
-        print(f"⚠ Redis not available ({e}) — using Supabase-only cache mode, "
-              f"retrying in {REDIS_RETRY_INTERVAL_SECONDS:.0f}s")
+        log.warning("redis.unavailable", host=_redis_host(redis_url), error=str(e),
+                    fallback="supabase_only", retry_in_s=REDIS_RETRY_INTERVAL_SECONDS)
         return None
 
 
@@ -119,11 +129,11 @@ async def get_cert_cache_redis(vendor_name: str) -> dict | None:
             return None   # Cache miss
 
         data = json.loads(raw)
-        print(f"  ✅ Redis cert cache HIT for '{vendor_name}' (<1ms)")
+        log.info("cert_cache.redis_hit", vendor=vendor_name)
         return data
 
     except Exception as e:
-        print(f"  ⚠ Redis read error: {e}")
+        log.warning("redis.read_failed", error=str(e))
         return None   # Fall back to Supabase
 
 
@@ -144,10 +154,10 @@ async def set_cert_cache_redis(vendor_name: str, cert_result: dict) -> None:
             CERT_CACHE_TTL_SECONDS,
             json.dumps(cert_result),
         )
-        print(f"  ✅ Redis cert cache SET for '{vendor_name}' (7-day TTL)")
+        log.info("cert_cache.redis_set", vendor=vendor_name, ttl_s=CERT_CACHE_TTL_SECONDS)
 
     except Exception as e:
-        print(f"  ⚠ Redis write error: {e}")
+        log.warning("redis.write_failed", error=str(e))
 
 
 async def invalidate_cert_cache(vendor_name: str) -> None:
@@ -162,9 +172,9 @@ async def invalidate_cert_cache(vendor_name: str) -> None:
     key = f"cert:v2:{vendor_name.lower().strip()}"
     try:
         await client.delete(key)
-        print(f"  ✅ Redis cert cache CLEARED for '{vendor_name}'")
+        log.info("cert_cache.redis_cleared", vendor=vendor_name)
     except Exception as e:
-        print(f"  ⚠ Redis delete error: {e}")
+        log.warning("redis.delete_failed", error=str(e))
 
 
 # ─── Token Rate Limiter (Redis) ───────────────────────────────────────────────

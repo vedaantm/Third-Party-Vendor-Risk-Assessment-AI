@@ -21,8 +21,11 @@ TIER MAPPING:
 
 import requests
 
+from app.log import get_logger
 from app.services.name_matching import names_match
 from app.settings import settings
+
+log = get_logger(__name__)
 
 DEMO_MODE = True
 CSA_BASE = "https://star.watch/api/v1/registry"
@@ -92,7 +95,7 @@ def _load_orgs(headers: dict) -> list:
         resp = requests.get(f"{CSA_BASE}/organizations", headers=headers, timeout=15)
         _org_cache = resp.json().get("organizations", [])
     except Exception as e:
-        print(f"  → CSA STAR org list load failed: {e}")
+        log.warning("csa_star.org_list_failed", error=str(e))
         _org_cache = []
     return _org_cache
 
@@ -101,7 +104,7 @@ def _check_live(company_name: str) -> dict:
     empty = {"csa_star_tier": None, "csa_star_evidence": None, "csa_star_found": False}
     headers = _live_headers()
     if not headers:
-        print("  → CSA_STAR_API_KEY not set")
+        log.warning("csa_star.api_key_missing")
         return empty
     orgs = _load_orgs(headers)
     org = next((o for o in orgs if names_match(company_name, o.get("name", ""))), None)
@@ -141,7 +144,7 @@ def _check_live(company_name: str) -> dict:
 def check_csa_star(company_name: str) -> dict:
     if DEMO_MODE:
         result = _check_seed(company_name)
-        status = result["csa_star_tier"] if result["csa_star_found"] else "not in seed dataset"
-        print(f"  → CSA STAR (demo): {status}")
+        log.info("csa_star.checked", vendor=company_name, mode="demo",
+                 found=result["csa_star_found"], tier=result["csa_star_tier"])
         return result
     return _check_live(company_name)
