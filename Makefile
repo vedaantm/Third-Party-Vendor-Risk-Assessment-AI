@@ -74,5 +74,13 @@ test-postgres: export TEST_POSTGRES_URL := $(LOCAL_POSTGRES_URL)
 test-postgres: db-up ## Migration tests against the local Postgres (needs Docker)
 	cd backend && uv run --locked pytest tests/test_migrations.py -q
 
-up: ## Start the full stack on the local Postgres (never Supabase)
+up: backend/.env ## Start the full stack on the local Postgres (never Supabase)
 	docker compose up --build
+
+# A fresh clone has no backend/.env, which docker-compose.yml loads. Start
+# from the example; never overwrite an existing one. The stack runs without
+# a Groq key, but evaluations need one.
+backend/.env:
+	cp backend/.env.example backend/.env
+	@echo "Created backend/.env from backend/.env.example."
+	@echo "Set GROQ_API_KEY in it (free at https://console.groq.com) to run evaluations."

@@ -14,6 +14,7 @@
 #   replacing the blind sleep() approach with exact rate limit management.
 #
 # Usage:
+#   First run:          make up   (creates backend/.env from the example)
 #   Start everything:   docker-compose up
 #   Backend only:       docker-compose up backend
 #   Redis only:         docker-compose up redis
