@@ -1,0 +1,234 @@
+{
+  "format": [
+    "app/agents/base_agent.py",
+    "app/agents/compliance_agent.py",
+    "app/agents/financial_agent.py",
+    "app/agents/meta_agent.py",
+    "app/agents/operational_agent.py",
+    "app/agents/reputation_agent.py",
+    "app/agents/strategic_agent.py",
+    "app/agents/structured_output.py",
+    "app/api/routes.py",
+    "app/db/database.py",
+    "app/db/models.py",
+    "app/llm/config.py",
+    "app/log.py",
+    "app/orchestrator/state.py",
+    "app/services/cache.py",
+    "app/services/cert_discovery_agent.py",
+    "app/services/cert_extraction_agent.py",
+    "app/services/cert_pipeline.py",
+    "app/services/compliance_discovery.py",
+    "app/services/csa_star_connector.py",
+    "app/services/edgar_pipeline.py",
+    "app/services/fedramp_connector.py",
+    "app/services/name_matching.py",
+    "app/services/ofac_screening.py",
+    "app/services/rag_service.py",
+    "app/services/scraper.py",
+    "app/settings.py",
+    "main_api.py",
+    "migrations/env.py",
+    "migrations/versions/0001_baseline.py",
+    "scripts/check_groq_usage.py",
+    "scripts/run_all_agents.py",
+    "scripts/run_cert_pipeline.py",
+    "scripts/run_compliance_stress.py",
+    "scripts/run_financial_agent.py",
+    "scripts/run_registry_connectors.py",
+    "tests/conftest.py",
+    "tests/eval/ragas_eval.py",
+    "tests/eval/run_eval.py",
+    "tests/test_agents.py",
+    "tests/test_api.py",
+    "tests/test_cache.py",
+    "tests/test_cert_pipeline.py",
+    "tests/test_logging.py",
+    "tests/test_meta_agent.py",
+    "tests/test_migrations.py",
+    "tests/test_ofac.py",
+    "tests/test_settings.py",
+    "tests/test_structured_output.py"
+  ],
+  "mypy": {
+    "app/agents/base_agent.py": {
+      "arg-type": 2,
+      "return-value": 1
+    },
+    "app/agents/meta_agent.py": {
+      "arg-type": 1,
+      "index": 8,
+      "union-attr": 2
+    },
+    "app/api/routes.py": {
+      "arg-type": 1,
+      "assignment": 5
+    },
+    "app/db/database.py": {
+      "call-overload": 1
+    },
+    "app/services/cert_discovery_agent.py": {
+      "call-arg": 2,
+      "union-attr": 6,
+      "var-annotated": 1
+    },
+    "app/services/cert_extraction_agent.py": {
+      "union-attr": 1
+    },
+    "app/services/edgar_pipeline.py": {
+      "var-annotated": 1
+    },
+    "app/services/rag_service.py": {
+      "arg-type": 3,
+      "index": 4
+    },
+    "app/services/scraper.py": {
+      "arg-type": 2,
+      "assignment": 2,
+      "attr-defined": 1,
+      "operator": 1,
+      "return-value": 5,
+      "union-attr": 27
+    },
+    "app/settings.py": {
+      "call-arg": 2
+    }
+  },
+  "ruff": {
+    "app/agents/base_agent.py": {
+      "I001": 1
+    },
+    "app/agents/reputation_agent.py": {
+      "F401": 1,
+      "F841": 1,
+      "I001": 1
+    },
+    "app/api/routes.py": {
+      "B008": 7,
+      "BLE001": 1,
+      "I001": 1,
+      "RUF010": 1,
+      "UP017": 5
+    },
+    "app/db/database.py": {
+      "I001": 1
+    },
+    "app/db/models.py": {
+      "I001": 1,
+      "UP017": 5
+    },
+    "app/orchestrator/state.py": {
+      "I001": 1,
+      "UP045": 14
+    },
+    "app/services/cache.py": {
+      "BLE001": 10,
+      "F401": 2,
+      "F841": 1,
+      "S110": 2
+    },
+    "app/services/cert_discovery_agent.py": {
+      "BLE001": 3,
+      "I001": 1
+    },
+    "app/services/cert_extraction_agent.py": {
+      "I001": 1
+    },
+    "app/services/cert_pipeline.py": {
+      "BLE001": 4,
+      "FURB188": 2
+    },
+    "app/services/csa_star_connector.py": {
+      "BLE001": 3,
+      "S110": 1
+    },
+    "app/services/edgar_pipeline.py": {
+      "BLE001": 3
+    },
+    "app/services/fedramp_connector.py": {
+      "BLE001": 1
+    },
+    "app/services/ofac_screening.py": {
+      "BLE001": 1
+    },
+    "app/services/rag_service.py": {
+      "BLE001": 5
+    },
+    "app/services/scraper.py": {
+      "BLE001": 16,
+      "DTZ005": 1,
+      "RUF013": 1,
+      "S110": 2,
+      "S112": 1,
+      "SIM102": 2
+    },
+    "scripts/check_groq_usage.py": {
+      "F541": 1,
+      "I001": 1
+    },
+    "scripts/run_all_agents.py": {
+      "BLE001": 2,
+      "F401": 2,
+      "F541": 3,
+      "I001": 1
+    },
+    "scripts/run_cert_pipeline.py": {
+      "I001": 1
+    },
+    "scripts/run_compliance_stress.py": {
+      "BLE001": 1,
+      "F541": 3,
+      "I001": 1
+    },
+    "scripts/run_financial_agent.py": {
+      "F401": 1,
+      "F541": 1
+    },
+    "scripts/run_registry_connectors.py": {
+      "I001": 2
+    },
+    "tests/conftest.py": {
+      "F401": 1
+    },
+    "tests/eval/ragas_eval.py": {
+      "DTZ003": 2,
+      "F401": 1,
+      "I001": 3
+    },
+    "tests/eval/run_eval.py": {
+      "ASYNC230": 2,
+      "BLE001": 1,
+      "F401": 1,
+      "F541": 1,
+      "I001": 3,
+      "UP017": 1
+    },
+    "tests/test_agents.py": {
+      "I001": 1
+    },
+    "tests/test_api.py": {
+      "F841": 1,
+      "I001": 3,
+      "UP017": 1
+    },
+    "tests/test_cache.py": {
+      "I001": 1,
+      "UP017": 2
+    },
+    "tests/test_cert_pipeline.py": {
+      "I001": 1
+    },
+    "tests/test_lint_baseline.py": {
+      "FLY002": 1
+    },
+    "tests/test_logging.py": {
+      "RUF015": 1
+    },
+    "tests/test_meta_agent.py": {
+      "I001": 1
+    },
+    "tests/test_ofac.py": {
+      "I001": 1
+    }
+  }
+}

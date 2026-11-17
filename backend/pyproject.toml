@@ -33,9 +33,17 @@ dev = [
     "httpx==0.28.1",       # FastAPI ASGI test client
     "aiosqlite==0.22.1",   # SQLite stand-in for Supabase in tests
     "fakeredis==2.40.0",   # in-memory Redis for cache tests
-    "ruff==0.16.7",        # lint; wired into `make check` in Phase 0 item 8
+    "ruff==0.16.7",        # lint + format (make lint)
+    "mypy==2.4.1",         # type check (make lint)
+    "types-requests==2.33.0.20261030",
 ]
 
 [tool.uv]
 # An application, not a library: install its dependencies, not the project.
 package = false
+
+[tool.mypy]
+python_version = "3.11"
+files = ["app", "main_api.py"]
+# Most third-party libraries here ship no type information
+ignore_missing_imports = true
