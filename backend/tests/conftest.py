@@ -61,6 +61,7 @@ TEST_ENV = {
     "DATABASE_SSL": "require",                    # the production default
     "LOG_LEVEL": "WARNING",                       # quiet test output
     "LOG_FORMAT": "json",
+    "AGENT_STRUCTURED_OUTPUT": "true",
 }
 os.environ.update(TEST_ENV)
 

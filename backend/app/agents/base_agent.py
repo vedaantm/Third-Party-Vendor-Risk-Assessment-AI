@@ -3,6 +3,7 @@ import math
 import re
 from abc import ABC, abstractmethod
 from langchain_core.messages import SystemMessage, HumanMessage
+from app.agents.structured_output import run_scoring_call
 from app.llm.config import get_llm, PRIMARY_MODEL
 from app.log import get_logger
 from app.orchestrator.state import VendorRiskState
@@ -73,8 +74,9 @@ class BaseAgent(ABC):
         # unavailable (None), its weight is redistributed, and the meta-agent
         # routes the evaluation to human review. Rate-limit errors also
         # propagate here, so the retry wrapper in routes.py can retry them.
-        response = await self.llm.ainvoke(messages)
-        result = self._parse_json_response(response.content)
+        # The call requests the AgentOutput JSON schema; see structured_output.
+        result = await run_scoring_call(self.llm, messages,
+                                        parse=self._parse_json_response, agent=agent)
         result["reasoning"] = reasoning
         return result
 

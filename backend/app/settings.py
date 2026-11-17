@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # read during local development.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "json"
+    # Agents' scoring call uses a JSON schema (structured output); false
+    # falls back to the plain-text call, for eval comparisons.
+    agent_structured_output: bool = True
     redis_url: str = "redis://localhost:6379"
     chroma_path: str = "./chroma_db"
     # Comma-separated; parsed by main_api._cors_origins (blank → default origin)
