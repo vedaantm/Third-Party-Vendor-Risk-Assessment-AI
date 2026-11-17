@@ -1,0 +1,162 @@
+# CI for every pull request and every push to main.
+#
+# Jobs run the same Makefile targets as a local `make check` / `make audit`,
+# so a green local run predicts a green CI run.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.7"          # same as backend/Dockerfile
+  NODE_VERSION: "22"            # same as frontend/Dockerfile
+
+jobs:
+  lint:
+    name: lint (ruff, ruff format, mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: No findings beyond backend/lint-baseline.json
+        run: make lint
+
+  backend-test:
+    name: backend tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg16   # same as docker-compose.yml
+        env:
+          POSTGRES_USER: vendoriq
+          POSTGRES_PASSWORD: vendoriq-ci
+          POSTGRES_DB: vendoriq
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vendoriq -d vendoriq"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CI_POSTGRES_URL: postgresql+asyncpg://vendoriq:vendoriq-ci@127.0.0.1:5432/vendoriq
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Tests, including the Postgres migration tests
+        env:
+          TEST_POSTGRES_URL: ${{ env.CI_POSTGRES_URL }}
+        run: make test-backend
+      - name: Migrations apply and match the models (alembic check)
+        working-directory: backend
+        env:
+          GROQ_API_KEY: ci-placeholder   # settings require it; no LLM call is made
+          DATABASE_URL: ${{ env.CI_POSTGRES_URL }}
+          DATABASE_SSL: disable
+        run: |
+          uv run --locked alembic upgrade head
+          uv run --locked alembic check
+
+  frontend-test:
+    name: frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  security:
+    name: security (gitleaks, pip-audit, npm audit, Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks scans the whole history
+      - name: gitleaks (secrets in git history)
+        # Image pinned by digest (v8.28.0). safe.directory: the checkout is
+        # owned by the runner user, not the container's.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            zricethezav/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854 \
+            git /repo --redact --no-banner
+      - name: Trivy (high/critical vulnerabilities with a fix, and secrets, in the working tree)
+        # Image pinned by digest (0.67.2) instead of aquasecurity/trivy-action,
+        # whose release tags were hijacked in 2026.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" \
+            aquasec/trivy@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08 \
+            fs /repo --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: pip-audit and npm audit (runtime dependencies)
+        run: make audit
+
+  attribution:
+    name: attribution (no AI co-authors)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Commit messages, authors and PR text
+        # Reuses .githooks/commit-msg, so CI and the local hook apply the
+        # same pattern. Event fields go through env, never into the script.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            range="$PUSH_BEFORE..$GITHUB_SHA"
+          else
+            range="$GITHUB_SHA"
+          fi
+          failed=0
+          msg="$(mktemp)"
+          for sha in $(git rev-list "$range"); do
+            git log -1 --format=%B "$sha" > "$msg"
+            bash .githooks/commit-msg "$msg" || { echo "  in commit $sha"; failed=1; }
+          done
+          if git log --format='%an <%ae>%n%cn <%ce>' "$range" | grep -iE 'claude|anthropic'; then
+            echo "an author or committer above is an AI tool"; failed=1
+          fi
+          if [ "$EVENT" = "pull_request" ]; then
+            printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$msg"
+            bash .githooks/commit-msg "$msg" || { echo "  in the PR title or body"; failed=1; }
+          fi
+          exit "$failed"
