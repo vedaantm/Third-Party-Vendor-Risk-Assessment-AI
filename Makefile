@@ -12,14 +12,17 @@
 NPM ?= npm
 
 .DEFAULT_GOAL := help
-.PHONY: help install check lint lint-baseline audit test test-backend test-frontend typecheck eval-smoke migrate db-up test-postgres up
+.PHONY: help install hooks check lint lint-baseline audit test test-backend test-frontend typecheck eval-smoke migrate db-up test-postgres up
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
 
-install: ## Install locked backend (incl. dev group) and frontend dependencies
+install: hooks ## Install locked backend (incl. dev group) and frontend dependencies
 	cd backend && uv sync --locked
 	cd frontend && $(NPM) ci
+
+hooks: ## Use the repo's git hooks (.githooks: pre-commit, commit-msg)
+	git config core.hooksPath .githooks
 
 check: lint typecheck test ## Everything that must pass before a commit
 

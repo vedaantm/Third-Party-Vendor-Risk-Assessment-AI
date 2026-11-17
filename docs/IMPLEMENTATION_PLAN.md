@@ -99,7 +99,7 @@ if grep -qiE 'co-authored-by:.*(claude|anthropic)|noreply@anthropic\.com|generat
 fi
 ```
 
-Add the same `grep` as a CI step over the PR's commit messages and PR body, so a commit made on another machine is caught too. Check the existing history with `git log --format='%an <%ae>%n%b' | grep -iE 'claude|anthropic'`. It should print nothing. GitHub's contributor list is built from commit authors and `Co-Authored-By` trailers, so removing the trailers is what keeps Claude off it.
+Add the same `grep` as a CI step over the PR's commit messages and PR body, so a commit made on another machine is caught too. Check the existing history with `git log --format='%an <%ae>%n%cn <%ce>%n%(trailers)' | grep -iE 'claude|anthropic'`. It should print nothing. It checks identities and trailers, not the whole message, because a commit may name the CLAUDE.md file without crediting anyone. GitHub's contributor list is built from commit authors and `Co-Authored-By` trailers, so removing the trailers is what keeps Claude off it.
 
 **4. Usage check after every prompt** — two parts. A status line shows your 5-hour and weekly usage under the prompt box, refreshed after every response at no token cost. The same script saves a snapshot to `~/.claude/usage.json`, which the CLAUDE.md "Usage check" rule has Claude read and report as the last line of every answer.
 
