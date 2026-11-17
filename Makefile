@@ -12,7 +12,7 @@
 NPM ?= npm
 
 .DEFAULT_GOAL := help
-.PHONY: help install check lint lint-baseline test test-backend test-frontend typecheck eval-smoke migrate db-up test-postgres up
+.PHONY: help install check lint lint-baseline audit test test-backend test-frontend typecheck eval-smoke migrate db-up test-postgres up
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
@@ -28,6 +28,16 @@ lint: ## ruff, ruff format and mypy: no findings beyond the baseline
 
 lint-baseline: ## Re-record the lint baseline after fixing findings
 	cd backend && uv run --locked python scripts/lint_baseline.py --update
+
+# ChromaDB advisories with no fixed release. All four are in Chroma's HTTP
+# server and its auth providers; VendorIQ embeds Chroma in-process
+# (PersistentClient) and never runs that server. Phase 4 removes Chroma.
+PIP_AUDIT_IGNORE := 	--ignore-vuln PYSEC-2026-311 	--ignore-vuln PYSEC-2026-3813 	--ignore-vuln PYSEC-2026-3814 	--ignore-vuln PYSEC-2026-3815
+
+audit: frontend/node_modules ## Known vulnerabilities in runtime dependencies (pip-audit, npm audit)
+	cd backend && uv export --locked --no-dev --no-hashes --format requirements-txt -q -o .audit-requirements.txt
+	cd backend && uvx --from pip-audit==2.10.1 pip-audit -r .audit-requirements.txt --disable-pip --no-deps --progress-spinner off $(PIP_AUDIT_IGNORE); status=$$?; rm -f .audit-requirements.txt; exit $$status
+	cd frontend && $(NPM) audit --omit=dev --audit-level=high
 
 test: test-backend test-frontend ## Backend and frontend tests (offline)
 
