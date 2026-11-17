@@ -36,6 +36,23 @@ class FakeLLM:
     def __init__(self, scoring_reply=VALID_JSON, scoring_error=None):
         self.scoring_reply, self.scoring_error = scoring_reply, scoring_error
         self.calls = []
+        self.structured_requests = []   # (schema, method, include_raw)
+
+    def with_structured_output(self, schema, *, method, include_raw):
+        """Like LangChain's include_raw mode: parse failures come back, not raised."""
+        self.structured_requests.append((schema, method, include_raw))
+        llm = self
+
+        class Structured:
+            async def ainvoke(self, messages):
+                raw = await llm.ainvoke(messages)
+                try:
+                    return {"raw": raw, "parsed": schema.model_validate_json(raw.content),
+                            "parsing_error": None}
+                except ValueError as e:   # pydantic ValidationError
+                    return {"raw": raw, "parsed": None, "parsing_error": e}
+
+        return Structured()
 
     async def ainvoke(self, messages):
         self.calls.append(messages)
