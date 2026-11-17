@@ -2,7 +2,7 @@
 name = "vendoriq-backend"
 version = "0.1.0"
 description = "VendorIQ API: agentic third-party vendor risk evaluation"
-requires-python = ">=3.11"
+requires-python = ">=3.11.5"
 # Direct dependencies, pinned to the versions the test suite passes with.
 # uv.lock pins everything else; Dependabot proposes upgrades.
 dependencies = [
