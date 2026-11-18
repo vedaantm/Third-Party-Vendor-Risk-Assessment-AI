@@ -87,7 +87,7 @@ services:
 
   # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine   # Alpine = small image (~15MB vs ~100MB full)
+    image: redis:8-alpine   # Alpine = small image (~15MB vs ~100MB full)
     ports:
       - "6379:6379"         # Expose to host for debugging with redis-cli
     volumes:
