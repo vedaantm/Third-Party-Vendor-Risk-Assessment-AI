@@ -22,9 +22,8 @@ _YFINANCE_INDUSTRY_MAP = {
     "business process outsourcing":    "IT Services",
     "technology services":             "IT Services",
     "consulting":                      "IT Services",
-    # "software—application":            "Software",
-    "software\u2014application":        "Software",
-    "software - application":           "Software",
+    # Keys are matched after _industry_text(), so "Software—Application",
+    # "Software - Application" and "Software Application" all hit one key.
     "software application":            "Software",
     "software infrastructure":         "Software",
     "cloud computing":                 "Software",
@@ -32,6 +31,7 @@ _YFINANCE_INDUSTRY_MAP = {
     "internet security":               "Cybersecurity",
     "cybersecurity":                   "Cybersecurity",
     "financial services":              "Financial Services",
+    "credit services":                 "Financial Services",
     "banks":                           "Financial Services",
     "insurance":                       "Financial Services",
     "asset management":                "Financial Services",
@@ -83,6 +83,21 @@ _INDUSTRY_KEYWORD_SIGNALS = {
 }
 
 
+def _industry_text(text: str) -> str:
+    """Lower-case, treat em dash, en dash and spaced hyphen as one space."""
+    text = re.sub(r"\s*[—–]\s*|\s+-\s+", " ", text.lower())
+    return " ".join(text.split())
+
+
+# A keyword must start at a word boundary: a plain substring test let
+# "cred(it services)" match "it services" and mapped Visa and Mastercard to
+# IT Services. Only the start is anchored, so plurals ("industrials") match.
+_YFINANCE_INDUSTRY_PATTERNS = [
+    (re.compile(r"(?<![a-z0-9])" + re.escape(_industry_text(keyword))), mapped)
+    for keyword, mapped in _YFINANCE_INDUSTRY_MAP.items()
+]
+
+
 def _normalize_yfinance_industry(yf_industry: str) -> str:
     """
     Map yfinance's freeform industry strings (e.g. 'Software—Application')
@@ -92,9 +107,9 @@ def _normalize_yfinance_industry(yf_industry: str) -> str:
     """
     if not yf_industry:
         return yf_industry
-    lower = yf_industry.lower()
-    for keyword, mapped in _YFINANCE_INDUSTRY_MAP.items():
-        if keyword in lower:
+    text = _industry_text(yf_industry)
+    for pattern, mapped in _YFINANCE_INDUSTRY_PATTERNS:
+        if pattern.search(text):
             return mapped
     return yf_industry
 
@@ -290,9 +305,11 @@ def _scrape_yfinance(company_name: str) -> dict:
             "quick_ratio":          info.get("quickRatio"),
             "debt_equity_ratio":    _safe_divide(info.get("debtToEquity"), 100),
             "ebitda":               info.get("ebitda"),
-            "net_margin":           round(info.get("profitMargins", 0) * 100, 2) if info.get("profitMargins") else None,
-            "gross_margin":         round(info.get("grossMargins", 0) * 100, 2) if info.get("grossMargins") else None,
-            "revenue_growth":       round(info.get("revenueGrowth", 0) * 100, 2) if info.get("revenueGrowth") else None,
+            # A real 0 (no debt, break-even, flat growth) is kept; only a
+            # missing value becomes None and is dropped below.
+            "net_margin":           _percent(info.get("profitMargins")),
+            "gross_margin":         _percent(info.get("grossMargins")),
+            "revenue_growth":       _percent(info.get("revenueGrowth")),
             # Absent → dropped below, so agents see "not provided" rather than "N/A"
             "credit_rating":        info.get("creditRating"),
             "customer_count":       None,
@@ -668,8 +685,13 @@ def _parse_dollar(text: str) -> float:
         return None
 
 
+def _percent(fraction):
+    """0.139 -> 13.9; None stays None, 0 stays 0.0."""
+    return round(fraction * 100, 2) if fraction is not None else None
+
+
 def _safe_divide(val, divisor):
     try:
-        return round(val / divisor, 4) if val else None
+        return round(val / divisor, 4) if val is not None else None
     except Exception:
         return None
