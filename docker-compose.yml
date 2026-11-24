@@ -51,6 +51,7 @@ services:
       - ./backend/.env
     volumes:
       - chroma_data:/app/chroma_db
+      - document_data:/app/document_storage   # vendor uploads (ADR 0005)
     depends_on:
       redis:
         condition: service_healthy   # Don't start until Redis is ready
@@ -118,6 +119,9 @@ volumes:
   chroma_data:
     # Named volume — survives container restarts and rebuilds
     # ChromaDB vector embeddings live here
+
+  document_data:
+    # Named volume — uploaded vendor documents survive rebuilds
 
   redis_data:
     # Named volume — Redis AOF persistence

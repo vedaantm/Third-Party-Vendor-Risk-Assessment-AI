@@ -37,6 +37,8 @@ def _fresh_test_chroma_dir() -> str:
 
 
 _TEST_CHROMA = _fresh_test_chroma_dir()
+# Uploaded documents: a throwaway directory, never ./document_storage
+_TEST_DOCUMENTS = tempfile.mkdtemp(prefix="vendorrisk-test-documents-")
 
 
 def _real_groq_key() -> str | None:
@@ -62,6 +64,10 @@ TEST_ENV = {
     "LOG_LEVEL": "WARNING",                       # quiet test output
     "LOG_FORMAT": "json",
     "AGENT_STRUCTURED_OUTPUT": "true",
+    "DOCUMENT_STORAGE_DIR": _TEST_DOCUMENTS,
+    "MAX_UPLOAD_BYTES": "1048576",                # 1 MiB keeps oversize tests cheap
+    "INVITE_TTL_HOURS": "24",
+    "DEFAULT_ORG_ID": "00000000-0000-0000-0000-00000000aaaa",
 }
 os.environ.update(TEST_ENV)
 

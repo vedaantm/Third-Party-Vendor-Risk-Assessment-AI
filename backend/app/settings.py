@@ -15,6 +15,7 @@ rather than a KeyError deep inside the first request that needs it.
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,6 +52,17 @@ class Settings(BaseSettings):
     # ISO date/datetime; parsed by routes._parse_cert_cache_valid_after
     cert_cache_valid_after: str | None = None
     csa_star_api_key: SecretStr | None = None
+
+    # ── Vendor document onboarding (ADR 0005) ─────────────
+    # Uploaded files live here until MinIO arrives (Phase 4).
+    document_storage_dir: str = "./document_storage"
+    # Largest accepted upload, in bytes (default 25 MiB).
+    max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    # How long a vendor invite link works, in hours (default 14 days).
+    invite_ttl_hours: int = Field(default=14 * 24, gt=0)
+    # The org every tenant row belongs to until Phase 1 reads org_id from
+    # the verified token. Never taken from a request body.
+    default_org_id: UUID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 class SettingsError(RuntimeError):

@@ -1,0 +1,32 @@
+{
+  "accreditation_body": {
+    "page": 1,
+    "quote": "Accredited by UKAS",
+    "value": "UKAS"
+  },
+  "certificate_number": {
+    "page": 1,
+    "quote": "Certificate number: IS 784512",
+    "value": "IS 784512"
+  },
+  "certification_body": {
+    "page": 1,
+    "quote": "Certification body: Meridian Assurance Ltd.",
+    "value": "Meridian Assurance Ltd"
+  },
+  "expiry_date": {
+    "page": 1,
+    "quote": "Expiry date: 2024-01-31",
+    "value": "2024-01-31"
+  },
+  "issue_date": {
+    "page": 1,
+    "quote": "Issue date: 2021-02-01",
+    "value": "2021-02-01"
+  },
+  "scope": {
+    "page": 1,
+    "quote": "Scope: the provision of the Northwind Data Platform",
+    "value": "The provision of the Northwind Data Platform, including development, hosting operations and customer support."
+  }
+}

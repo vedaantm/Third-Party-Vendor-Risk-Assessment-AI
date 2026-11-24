@@ -19,6 +19,7 @@ from app.settings import settings
 # Before importing the rest of the app: some modules log at import time
 configure_logging(settings.log_level, settings.log_format)
 
+from app.api.engagements import router as engagements_router
 from app.api.routes import router
 from app.db.database import engine
 
@@ -122,6 +123,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Register routes
 app.include_router(router, prefix="/api/v1")
+app.include_router(engagements_router, prefix="/api/v1")
 
 
 @app.get("/")

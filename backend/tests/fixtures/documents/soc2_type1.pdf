@@ -1,0 +1,91 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 430 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+(SYNTHETIC TEST DOCUMENT - invented for VendorIQ tests, not a real report.) Tj T*
+(SOC 2 Type 1 Report) Tj T*
+(System and Organization Controls Report on Controls Relevant to Security, Availability and) Tj T*
+(Confidentiality) Tj T*
+(Northwind Cloud Services, Inc. - Northwind Data Platform) Tj T*
+(As of September 30, 2026) Tj T*
+(Prepared by Halcyon & Reed LLP, Independent Service Auditor) Tj T*
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 648 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+(Section 1 - Independent Service Auditor's Report) Tj T*
+(Scope: the Northwind Data Platform, including the web application, APIs and the data processing) Tj T*
+(services.) Tj T*
+(Trust services criteria in scope: Security, Availability, Confidentiality.) Tj T*
+(Northwind uses Amazon Web Services for hosting. Amazon Web Services is a subservice) Tj T*
+(organization; the carve-out method was used.) Tj T*
+(Opinion) Tj T*
+(In our opinion, in all material respects, the description fairly presents the system and the) Tj T*
+(controls were suitably designed as of September 30, 2026.) Tj T*
+(Halcyon & Reed LLP) Tj T*
+ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 632 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+(Section 4 - Trust Services Criteria, Controls, Tests of Controls and Results) Tj T*
+(CC6.1 Logical access to production systems is restricted to authorised personnel. No exceptions) Tj T*
+(noted.) Tj T*
+(CC6.2 Access is removed within 24 hours of termination. No exceptions noted.) Tj T*
+(CC7.3 Security incidents are logged, triaged and reviewed. No exceptions noted.) Tj T*
+(Complementary User Entity Controls) Tj T*
+(User entities are responsible for managing their own user accounts and passwords.) Tj T*
+(User entities are responsible for reviewing the access reports Northwind provides.) Tj T*
+ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000350 00000 n 
+0000000831 00000 n 
+0000000957 00000 n 
+0000001656 00000 n 
+0000001782 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+2465
+%%EOF

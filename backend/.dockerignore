@@ -3,5 +3,6 @@ venv/
 **/*.pyc
 .env
 chroma_db/
+document_storage/
 .git
 .venv/
