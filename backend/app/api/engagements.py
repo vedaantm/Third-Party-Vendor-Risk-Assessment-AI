@@ -28,7 +28,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,11 @@ PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 PDF_MAGIC = b"%PDF-"
 READ_CHUNK = 64 * 1024
 DEFAULT_PORTAL_ORIGIN = "http://localhost:5173"  # same default as main_api CORS
+MIN_INVITE_DAYS, MAX_INVITE_DAYS = 1, 90
+LONG_EXPIRY_DAYS = 30  # longer invites need acknowledge_long_expiry
+LONG_EXPIRY_MESSAGE = (
+    f"Invites longer than {LONG_EXPIRY_DAYS} days need acknowledge_long_expiry"
+)
 
 
 # ─── Tenancy ──────────────────────────────────────────────────────────────────
@@ -67,10 +72,44 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _new_invite() -> tuple[str, str, datetime]:
+class InviteOptions(BaseModel):
+    """
+    The client picks how long a link works: 1 to 90 days, or INVITE_TTL_HOURS
+    (default 7 days) when omitted. More than 30 days must be acknowledged.
+    """
+
+    # extra="forbid": org_id (or anything else) in the body is rejected
+    model_config = ConfigDict(extra="forbid")
+
+    expires_in_days: int | None = Field(
+        default=None, ge=MIN_INVITE_DAYS, le=MAX_INVITE_DAYS
+    )
+    acknowledge_long_expiry: bool = False
+
+    @model_validator(mode="after")
+    def _long_expiry_acknowledged(self) -> "InviteOptions":
+        days = self.expires_in_days
+        if (
+            days is not None
+            and days > LONG_EXPIRY_DAYS
+            and not self.acknowledge_long_expiry
+        ):
+            raise ValueError(LONG_EXPIRY_MESSAGE)
+        return self
+
+    def ttl(self) -> timedelta:
+        if self.expires_in_days is None:
+            return timedelta(hours=settings.invite_ttl_hours)
+        return timedelta(days=self.expires_in_days)
+
+    def is_long(self) -> bool:
+        return (self.expires_in_days or 0) > LONG_EXPIRY_DAYS
+
+
+def _new_invite(options: InviteOptions) -> tuple[str, str, datetime]:
     """(token, its hash, expiry). The token itself is never stored."""
     token = secrets.token_urlsafe(32)
-    expires = datetime.now(UTC) + timedelta(hours=settings.invite_ttl_hours)
+    expires = datetime.now(UTC) + options.ttl()
     return token, hash_token(token), expires
 
 
@@ -81,13 +120,17 @@ def _portal_origin() -> str:
     return origins[0] if origins else DEFAULT_PORTAL_ORIGIN
 
 
-def _invite_payload(token: str, expires: datetime) -> dict:
+def _invite_payload(token: str, expires: datetime, options: InviteOptions) -> dict:
     path = f"/portal/{token}"
+    # Not persisted yet (no column until a later migration); returned so the
+    # client has a record of the acknowledgement.
+    acknowledged = datetime.now(UTC).isoformat() if options.is_long() else None
     return {
         "invite_token": token,
         "invite_path": path,
         "invite_url": _portal_origin() + path,
         "invite_expires_at": expires.isoformat(),
+        "long_expiry_acknowledged_at": acknowledged,
     }
 
 
@@ -187,10 +230,7 @@ async def _engagement_for_token(
 # ─── Client side ──────────────────────────────────────────────────────────────
 
 
-class EngagementCreate(BaseModel):
-    # extra="forbid": org_id (or anything else) in the body is rejected
-    model_config = ConfigDict(extra="forbid")
-
+class EngagementCreate(InviteOptions):
     vendor_name: str = Field(min_length=1, max_length=255)
     company_name: str = Field(min_length=1, max_length=255)
 
@@ -210,7 +250,7 @@ async def create_engagement(
     org_id: OrgId,
 ):
     """Create an engagement. The response is the only place the invite link appears."""
-    token, token_hash, expires = _new_invite()
+    token, token_hash, expires = _new_invite(body)
     eng = VendorEngagement(
         org_id=org_id,
         vendor_name=body.vendor_name,
@@ -221,7 +261,10 @@ async def create_engagement(
     db.add(eng)
     await db.commit()
     log.info("engagement.created", engagement_id=eng.id)
-    return {**_engagement_dict(eng, [], client=True), **_invite_payload(token, expires)}
+    return {
+        **_engagement_dict(eng, [], client=True),
+        **_invite_payload(token, expires, body),
+    }
 
 
 @router.get("/engagements")
@@ -264,15 +307,17 @@ async def reissue_invite(
     engagement_id: str,
     db: DB,
     org_id: OrgId,
+    body: InviteOptions | None = None,
 ):
     """A new invite link with a fresh expiry; the previous link stops working."""
+    options = body or InviteOptions()
     eng = await _engagement_or_404(db, org_id, engagement_id)
-    token, token_hash, expires = _new_invite()
+    token, token_hash, expires = _new_invite(options)
     eng.invite_token_hash = token_hash
     eng.invite_expires_at = expires
     await db.commit()
     log.info("engagement.invite_reissued", engagement_id=eng.id)
-    return {"id": eng.id, **_invite_payload(token, expires)}
+    return {"id": eng.id, **_invite_payload(token, expires, options)}
 
 
 # ─── Vendor portal ────────────────────────────────────────────────────────────

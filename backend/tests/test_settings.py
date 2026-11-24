@@ -76,7 +76,7 @@ def test_defaults_and_unrelated_keys_are_ignored(clean_env, tmp_path):
     assert s.csa_star_api_key is None
     assert s.document_storage_dir == "./document_storage"
     assert s.max_upload_bytes == 25 * 1024 * 1024
-    assert s.invite_ttl_hours == 14 * 24
+    assert s.invite_ttl_hours == 7 * 24
     assert str(s.default_org_id) == "00000000-0000-0000-0000-000000000001"
 
 

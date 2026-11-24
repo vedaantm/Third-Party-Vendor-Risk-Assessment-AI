@@ -421,3 +421,91 @@ def test_engagement_from_another_org_returns_404(Session):
     assert call("GET", f"/api/v1/engagements/{other_id}").status_code == 404
     assert call("GET", "/api/v1/engagements").json() == []
     assert call("GET", "/api/v1/portal/other-token").status_code == 404
+
+
+# ── Invite expiry chosen by the client ────────────────────
+
+
+def expires_in_hours(response_json):
+    expires = datetime.fromisoformat(response_json["invite_expires_at"])
+    return (expires - datetime.now(UTC)).total_seconds() / 3600
+
+
+def test_default_expiry_is_the_setting_7_days(Session, monkeypatch):
+    monkeypatch.setattr(settings, "invite_ttl_hours", 168)
+    created = create()
+    assert abs(expires_in_hours(created) - 168) < 0.1
+    assert created["long_expiry_acknowledged_at"] is None
+    [eng] = rows(Session, VendorEngagement)
+    stored = eng.invite_expires_at.replace(tzinfo=UTC)
+    assert stored.isoformat() == created["invite_expires_at"]
+
+
+@pytest.mark.parametrize(
+    "days,extra", [(3, {}), (30, {}), (90, {"acknowledge_long_expiry": True})]
+)
+def test_custom_expiry(Session, days, extra):
+    created = create({**BODY, "expires_in_days": days, **extra})
+    assert abs(expires_in_hours(created) - days * 24) < 0.1
+    assert call("GET", f"/api/v1/portal/{created['invite_token']}").status_code == 200
+
+
+@pytest.mark.parametrize("days", [0, 91, -1, 2.5])
+def test_expiry_out_of_range_is_422(Session, days):
+    body = {**BODY, "expires_in_days": days, "acknowledge_long_expiry": True}
+    assert call("POST", "/api/v1/engagements", json=body).status_code == 422
+    assert rows(Session, VendorEngagement) == []
+
+
+def test_long_expiry_needs_acknowledgement(Session):
+    response = call("POST", "/api/v1/engagements", json={**BODY, "expires_in_days": 31})
+    assert response.status_code == 422
+    assert "Invites longer than 30 days need acknowledge_long_expiry" in response.text
+    assert rows(Session, VendorEngagement) == []
+
+    body = {**BODY, "expires_in_days": 31, "acknowledge_long_expiry": True}
+    created = create(body)
+    assert abs(expires_in_hours(created) - 31 * 24) < 0.1
+    acknowledged = datetime.fromisoformat(created["long_expiry_acknowledged_at"])
+    assert abs((datetime.now(UTC) - acknowledged).total_seconds()) < 60
+
+    thirty = create({**BODY, "expires_in_days": 30})
+    assert thirty["long_expiry_acknowledged_at"] is None
+
+
+def test_reinvite_with_new_expiry_invalidates_old_link(Session):
+    created = create()
+    old = created["invite_token"]
+    response = call(
+        "POST",
+        f"/api/v1/engagements/{created['id']}/invite",
+        json={"expires_in_days": 5},
+    )
+    assert response.status_code == 200
+    assert abs(expires_in_hours(response.json()) - 5 * 24) < 0.1
+    assert call("GET", f"/api/v1/portal/{old}").status_code == 404
+    assert (
+        call("GET", f"/api/v1/portal/{response.json()['invite_token']}").status_code
+        == 200
+    )
+
+
+@pytest.mark.parametrize(
+    "body,status",
+    [
+        ({"expires_in_days": 0}, 422),
+        ({"expires_in_days": 91, "acknowledge_long_expiry": True}, 422),
+        ({"expires_in_days": 45}, 422),
+        ({"expires_in_days": 45, "acknowledge_long_expiry": True}, 200),
+        ({"org_id": OTHER_ORG}, 422),
+    ],
+)
+def test_reinvite_validates_expiry(Session, body, status):
+    created = create()
+    url = f"/api/v1/engagements/{created['id']}/invite"
+    response = call("POST", url, json=body)
+    assert response.status_code == status
+    if status == 422:  # the old link still works when the request is refused
+        assert (
+            call("GET", f"/api/v1/portal/{created['invite_token']}").status_code == 200
+        )

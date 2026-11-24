@@ -27,7 +27,9 @@ has to rewrite.
   vendor engagement and gets a link holding a random token (`secrets`, at least
   256 bits). Only the token's SHA-256 hash is stored
   (`vendor_engagements.invite_token_hash`, unique). The link expires after
-  `INVITE_TTL_HOURS` and opens exactly one engagement. A wrong or expired
+  `expires_in_days` (1 to 90, chosen by the client per invite; more than 30
+  needs `acknowledge_long_expiry: true`), or after `INVITE_TTL_HOURS`
+  (default 7 days) when none is given. It opens exactly one engagement. A wrong or expired
   token gets 404, the same as an engagement that doesn't exist.
 - **Every new table is tenant-owned now.** `vendor_engagements`,
   `vendor_documents` and `questionnaire_answers` have `org_id NOT NULL` and an
