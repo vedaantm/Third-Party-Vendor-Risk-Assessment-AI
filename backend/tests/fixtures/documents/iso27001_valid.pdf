@@ -1,0 +1,47 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 686 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+(SYNTHETIC TEST DOCUMENT - invented for VendorIQ tests, not a real report.) Tj T*
+(Certificate of Registration) Tj T*
+(Meridian Assurance Ltd certifies that the information security management system of) Tj T*
+(Northwind Cloud Services, Inc.) Tj T*
+(has been assessed and found to conform to ISO/IEC 27001:2022.) Tj T*
+(Scope: the provision of the Northwind Data Platform, including development, hosting operations) Tj T*
+(and customer support.) Tj T*
+(Certificate number: IS 784512) Tj T*
+(Issue date: 2025-03-15) Tj T*
+(Expiry date: 2028-03-14) Tj T*
+(Certification body: Meridian Assurance Ltd. Accredited by UKAS \(accreditation number 9999\).) Tj T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000212 00000 n 
+0000000338 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1075
+%%EOF

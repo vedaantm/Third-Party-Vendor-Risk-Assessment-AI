@@ -1,0 +1,73 @@
+{
+  "auditor_firm": {
+    "page": 1,
+    "quote": "Prepared by Halcyon & Reed LLP, Independent Service Auditor",
+    "value": "Halcyon & Reed LLP"
+  },
+  "bridge_letter": null,
+  "complementary_user_entity_controls": {
+    "page": 3,
+    "quote": "User entities are responsible for managing their own user accounts",
+    "value": [
+      "User entities manage their own user accounts and passwords.",
+      "User entities review the access reports Northwind provides."
+    ]
+  },
+  "control_exceptions": [
+    {
+      "control": "CC6.2",
+      "description": "For 2 of 25 terminated users sampled, access was removed after 3 days.",
+      "page": 3,
+      "quote": "for 2 of 25 terminated users sampled, access was removed after 3 days."
+    },
+    {
+      "control": "CC7.3",
+      "description": "1 of 15 incident tickets sampled had no documented root cause analysis.",
+      "page": 3,
+      "quote": "1 of 15 incident tickets sampled had no documented root cause analysis."
+    }
+  ],
+  "opinion": {
+    "page": 2,
+    "quote": "In our opinion, in all material respects, the controls stated in the description were suitably designed and operated effectively throughout the period October 1, 2025 to September 30, 2026.",
+    "value": "unqualified"
+  },
+  "period_end": {
+    "page": 1,
+    "quote": "For the period October 1, 2025 to September 30, 2026",
+    "value": "2026-09-30"
+  },
+  "period_start": {
+    "page": 1,
+    "quote": "For the period October 1, 2025 to September 30, 2026",
+    "value": "2025-10-01"
+  },
+  "report_type": {
+    "page": 1,
+    "quote": "SOC 2 Type 2 Report",
+    "value": 2
+  },
+  "subservice_organisations": {
+    "page": 2,
+    "quote": "Amazon Web Services is a subservice organization",
+    "value": [
+      "Amazon Web Services (hosting, carve-out method)"
+    ]
+  },
+  "systems_in_scope": {
+    "page": 2,
+    "quote": "Scope: the Northwind Data Platform",
+    "value": [
+      "Northwind Data Platform"
+    ]
+  },
+  "trust_services_criteria": {
+    "page": 2,
+    "quote": "Trust services criteria in scope: Security, Availability, Confidentiality.",
+    "value": [
+      "Security",
+      "Availability",
+      "Confidentiality"
+    ]
+  }
+}

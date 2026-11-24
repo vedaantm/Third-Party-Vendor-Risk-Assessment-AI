@@ -1,0 +1,3 @@
+# Byte-exact fixtures: the tests compare them to generate.py output
+*.pdf binary
+*.json -text
