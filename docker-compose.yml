@@ -69,7 +69,7 @@ services:
 
   # ── Postgres (local) ────────────────────────────────────────────────────────
   postgres:
-    image: pgvector/pgvector:0.8.6-pg16   # Postgres 16 with pgvector (used from Phase 4)
+    image: pgvector/pgvector:0.8.7-pg16   # Postgres 16 with pgvector (used from Phase 4)
     environment:
       POSTGRES_USER: vendoriq
       POSTGRES_PASSWORD: "${LOCAL_POSTGRES_PASSWORD:-vendoriq-local}"   # local-only throwaway
