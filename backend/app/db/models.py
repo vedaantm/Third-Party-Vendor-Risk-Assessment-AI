@@ -4,10 +4,15 @@
 Database Models
 ===============
 
-Two tables:
+Tables:
     evaluations  — the final results of each vendor evaluation
     cert_cache   — cached certification discovery results (7-day TTL)
     jobs         — async job tracking for the 2-minute evaluation pipeline
+
+    Vendor document onboarding (ADR 0005), tenant-owned (org_id NOT NULL):
+    vendor_engagements     — a client's invite to one vendor
+    vendor_documents       — files the vendor uploaded for an engagement
+    questionnaire_answers  — security questionnaire answers for an engagement
 
 WHY A JOBS TABLE?
     The evaluation pipeline takes ~2 minutes. HTTP connections time out.
@@ -21,8 +26,11 @@ WHY A JOBS TABLE?
 """
 
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import String, Float, DateTime, Text, JSON, Integer
+from datetime import UTC, datetime, timezone
+from sqlalchemy import (
+    JSON, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint, Uuid,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
@@ -211,3 +219,117 @@ class Job(Base):
         d = self.to_status_dict()
         d["result"] = self.result
         return d
+
+
+# ─── Vendor document onboarding (ADR 0005) ────────────────────────────────────
+#
+# Every row carries org_id NOT NULL. Until Phase 1 it is filled server-side
+# from settings.default_org_id, never from a request body; Phase 1 swaps the
+# source to the verified token. Ids are UUIDs (native uuid on Postgres) so
+# Phase 1's row-level security can compare org_id to a uuid directly.
+
+ENGAGEMENT_STATUSES = ("invited", "submitted", "closed")
+DOCUMENT_KINDS = ("soc2", "iso27001", "other", "unknown")
+PARSE_STATUSES = ("pending", "parsing", "parsed", "failed")
+ANSWER_STATUSES = ("suggested", "accepted", "edited", "unanswered")
+
+# JSONB on Postgres, plain JSON elsewhere (SQLite tests), like agent_outputs
+JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+
+def _uuid_str() -> str:
+    return str(uuid.uuid4())
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _one_of(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+
+
+class VendorEngagement(Base):
+    """
+    A client company inviting one vendor to upload documents. The vendor
+    reaches it only through the invite link; the token itself is never
+    stored, only its SHA-256 hash, and it stops working at invite_expires_at.
+    """
+    __tablename__ = "vendor_engagements"
+    __table_args__ = (
+        CheckConstraint(_one_of("status", ENGAGEMENT_STATUSES), name="ck_vendor_engagements_status"),
+        Index("ix_vendor_engagements_org_id_created_at", "org_id", "created_at"),
+    )
+
+    id:                Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid_str)
+    org_id:            Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False)
+    vendor_name:       Mapped[str] = mapped_column(String(255), nullable=False)
+    company_name:      Mapped[str] = mapped_column(String(255), nullable=False)   # the client
+    invite_token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    invite_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status:            Mapped[str] = mapped_column(String(20), nullable=False, default="invited")
+    created_at:        Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class VendorDocument(Base):
+    """
+    One uploaded file. storage_key is a path relative to the document storage
+    directory (MinIO from Phase 4); parse results land in extracted.
+    """
+    __tablename__ = "vendor_documents"
+    __table_args__ = (
+        CheckConstraint(_one_of("kind", DOCUMENT_KINDS), name="ck_vendor_documents_kind"),
+        CheckConstraint(_one_of("parse_status", PARSE_STATUSES), name="ck_vendor_documents_parse_status"),
+        Index("ix_vendor_documents_org_id_created_at", "org_id", "created_at"),
+        Index("ix_vendor_documents_engagement_id", "engagement_id"),
+    )
+
+    id:            Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid_str)
+    org_id:        Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False)
+    engagement_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("vendor_engagements.id", ondelete="CASCADE"), nullable=False
+    )
+    kind:          Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    filename:      Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type:  Mapped[str] = mapped_column(String(255), nullable=False)
+    size_bytes:    Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256:        Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key:   Mapped[str] = mapped_column(String(512), nullable=False)
+    parse_status:  Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    parse_error:   Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted:     Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    evidence_tier: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class QuestionnaireAnswer(Base):
+    """
+    One answer per (engagement, question). Autofill writes "suggested" rows
+    with their source document, page and quote; the client's accepted or
+    edited answers are kept when autofill runs again.
+    """
+    __tablename__ = "questionnaire_answers"
+    __table_args__ = (
+        CheckConstraint(_one_of("status", ANSWER_STATUSES), name="ck_questionnaire_answers_status"),
+        UniqueConstraint("engagement_id", "question_id", name="uq_questionnaire_answers_engagement_question"),
+        Index("ix_questionnaire_answers_org_id_created_at", "org_id", "created_at"),
+    )
+
+    id:                 Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid_str)
+    org_id:             Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False)
+    engagement_id:      Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("vendor_engagements.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id:        Mapped[str] = mapped_column(String(100), nullable=False)
+    value:              Mapped[dict | list | str | bool | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    source_document_id: Mapped[str | None] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("vendor_documents.id", ondelete="SET NULL"), nullable=True
+    )
+    source_page:        Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_quote:       Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence:         Mapped[float | None] = mapped_column(Float, nullable=True)
+    status:             Mapped[str] = mapped_column(String(20), nullable=False, default="unanswered")
+    created_at:         Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at:         Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now
+    )

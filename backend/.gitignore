@@ -30,6 +30,7 @@ env/
 *.db
 *.sqlite3
 chroma_db/
+document_storage/
 
 # Notebooks
 .ipynb_checkpoints/

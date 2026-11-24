@@ -74,6 +74,33 @@ def test_defaults_and_unrelated_keys_are_ignored(clean_env, tmp_path):
     assert s.cors_allow_origins is None
     assert s.cert_cache_valid_after is None
     assert s.csa_star_api_key is None
+    assert s.document_storage_dir == "./document_storage"
+    assert s.max_upload_bytes == 25 * 1024 * 1024
+    assert s.invite_ttl_hours == 14 * 24
+    assert str(s.default_org_id) == "00000000-0000-0000-0000-000000000001"
+
+
+# ── Vendor document onboarding settings ───────────────────
+
+def test_onboarding_settings_are_read_from_the_env_file(clean_env, tmp_path):
+    env_file = make_env_file(tmp_path, GROQ_API_KEY="g", DATABASE_URL="d", DOCUMENT_STORAGE_DIR="/srv/docs",
+                             MAX_UPLOAD_BYTES="1000", INVITE_TTL_HOURS="2",
+                             DEFAULT_ORG_ID="11111111-2222-3333-4444-555555555555")
+    s = Settings(_env_file=env_file)
+    assert s.document_storage_dir == "/srv/docs"
+    assert (s.max_upload_bytes, s.invite_ttl_hours) == (1000, 2)
+    assert str(s.default_org_id) == "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.mark.parametrize("name, value", [
+    ("MAX_UPLOAD_BYTES", "0"),
+    ("INVITE_TTL_HOURS", "-1"),
+    ("DEFAULT_ORG_ID", "not-a-uuid"),
+])
+def test_onboarding_settings_reject_invalid_values(clean_env, tmp_path, name, value):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Settings(_env_file=make_env_file(tmp_path, GROQ_API_KEY="g", DATABASE_URL="d", **{name: value}))
 
 
 def test_env_file_is_located_relative_to_the_code_not_the_cwd(monkeypatch, tmp_path):
@@ -114,6 +141,8 @@ def test_test_process_uses_test_values_only():
     assert settings.groq_api_key.get_secret_value() == TEST_ENV["GROQ_API_KEY"]
     assert settings.chroma_path == TEST_ENV["CHROMA_PATH"]
     assert settings.redis_url == TEST_ENV["REDIS_URL"]
+    assert settings.document_storage_dir == TEST_ENV["DOCUMENT_STORAGE_DIR"]
+    assert str(settings.default_org_id) == TEST_ENV["DEFAULT_ORG_ID"]
 
 
 

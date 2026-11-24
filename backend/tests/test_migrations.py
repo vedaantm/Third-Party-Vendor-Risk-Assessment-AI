@@ -2,6 +2,7 @@
 Alembic migrations: the baseline builds the models' schema, `alembic check`
 catches drift between models and migrations, and databases created by the
 old create_all startup step are refused (not half-migrated) until stamped.
+0002 adds the vendor onboarding tables (ADR 0005) and downgrades cleanly.
 
 Every test uses a throwaway SQLite file — never Supabase.
 """
@@ -20,7 +21,10 @@ import app.db.models  # noqa: F401 — register tables
 from app.db.database import Base
 
 BACKEND = Path(__file__).resolve().parents[1]
-TABLES = {"cert_cache", "evaluations", "jobs"}
+BASELINE_TABLES = {"cert_cache", "evaluations", "jobs"}
+ONBOARDING_TABLES = {"vendor_engagements", "vendor_documents", "questionnaire_answers"}
+TABLES = BASELINE_TABLES | ONBOARDING_TABLES
+HEAD = "0002"
 
 
 def alembic_config(db_path: Path) -> Config:
@@ -49,11 +53,17 @@ def schema(db_path: Path) -> dict:
         engine.dispose()
 
 
-def create_all(db_path: Path) -> None:
-    """What main_api's lifespan did before migrations."""
+def create_all(db_path: Path, tables: set[str] | None = None) -> None:
+    """Base.metadata.create_all, optionally limited to some tables."""
     engine = sa.create_engine(f"sqlite:///{db_path.as_posix()}")
-    Base.metadata.create_all(engine)
+    selected = None if tables is None else [Base.metadata.tables[t] for t in sorted(tables)]
+    Base.metadata.create_all(engine, tables=selected)
     engine.dispose()
+
+
+def create_legacy(db_path: Path) -> None:
+    """What main_api's lifespan did before migrations: the baseline tables only."""
+    create_all(db_path, BASELINE_TABLES)
 
 
 def current_revision(db_path: Path) -> str | None:
@@ -74,18 +84,31 @@ def db(tmp_path):
 
 # ── Baseline ──────────────────────────────────────────────
 
-def test_upgrade_creates_every_table_at_the_baseline_revision(db):
+def test_upgrade_to_baseline_creates_the_baseline_tables(db):
+    command.upgrade(alembic_config(db), "0001")
+    assert set(schema(db)) == BASELINE_TABLES
+    assert current_revision(db) == "0001"
+
+
+def test_upgrade_to_head_creates_every_table(db):
     command.upgrade(alembic_config(db), "head")
     assert set(schema(db)) == TABLES
-    assert current_revision(db) == "0001"
+    assert current_revision(db) == HEAD
 
 
 def test_migrated_schema_is_identical_to_create_all(db, tmp_path):
     # Proves an existing create_all database can safely be stamped at 0001
-    command.upgrade(alembic_config(db), "head")
+    command.upgrade(alembic_config(db), "0001")
     legacy = tmp_path / "legacy.db"
-    create_all(legacy)
+    create_legacy(legacy)
     assert schema(db) == schema(legacy)
+
+
+def test_head_schema_is_identical_to_create_all_of_the_models(db, tmp_path):
+    command.upgrade(alembic_config(db), "head")
+    models = tmp_path / "models.db"
+    create_all(models)
+    assert schema(db) == schema(models)
 
 
 def test_downgrade_to_base_removes_every_table(db):
@@ -111,12 +134,19 @@ def test_postgres_sql_renders_offline_without_a_database():
     assert "TIMESTAMP WITH TIME ZONE" in sql and "UNIQUE (evaluation_id)" in sql
     assert "agent_outputs JSONB" in sql   # matches the production Supabase column
     assert "INSERT INTO alembic_version (version_num) VALUES ('0001')" in sql
+    assert "UPDATE alembic_version SET version_num='0002'" in sql
+    # Onboarding tables: native uuid ids, JSONB documents, tenant indexes
+    assert "org_id UUID NOT NULL" in sql
+    assert "extracted JSONB" in sql and "value JSONB" in sql
+    for table in ONBOARDING_TABLES:
+        assert f"CREATE INDEX ix_{table}_org_id_created_at ON {table} (org_id, created_at)" in sql
+    assert "FOREIGN KEY(engagement_id) REFERENCES vendor_engagements (id) ON DELETE CASCADE" in sql
 
 
 def test_exactly_one_head():
     from alembic.script import ScriptDirectory
     heads = ScriptDirectory.from_config(alembic_config(Path("unused.db"))).get_heads()
-    assert heads == ["0001"]
+    assert heads == [HEAD]
 
 
 # ── Drift check (what CI runs as `alembic check`) ─────────
@@ -144,7 +174,7 @@ def test_check_fails_when_a_model_changes_without_a_migration(db):
 # ── Databases created by the old create_all step ──────────
 
 def test_upgrade_refuses_a_create_all_database_without_changing_it(db):
-    create_all(db)
+    create_legacy(db)
     before = schema(db)
     with pytest.raises(Exception, match="alembic stamp 0001"):
         command.upgrade(alembic_config(db), "head")
@@ -152,13 +182,139 @@ def test_upgrade_refuses_a_create_all_database_without_changing_it(db):
     assert current_revision(db) is None
 
 
-def test_stamped_create_all_database_checks_clean(db):
-    create_all(db)
+def test_stamped_create_all_database_upgrades_to_head_and_checks_clean(db):
+    # The existing Supabase path: stamped at 0001, then 0002 adds only the new tables
+    create_legacy(db)
     cfg = alembic_config(db)
     command.stamp(cfg, "0001")
     assert current_revision(db) == "0001"
+    before = schema(db)
+    command.upgrade(cfg, "head")
+    after = schema(db)
+    assert current_revision(db) == HEAD
+    assert set(after) == TABLES
+    assert {t: after[t] for t in BASELINE_TABLES} == before   # existing tables untouched
     command.check(cfg)
     command.upgrade(cfg, "head")   # already at head: a no-op, not an error
+
+
+# ── 0002: vendor onboarding tables ────────────────────────
+
+def test_downgrade_0002_drops_only_the_onboarding_tables(db):
+    cfg = alembic_config(db)
+    command.upgrade(cfg, "0001")
+    baseline = schema(db)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0001")
+    assert schema(db) == baseline
+    assert current_revision(db) == "0001"
+    command.upgrade(cfg, "head")   # and re-applies cleanly
+    assert set(schema(db)) == TABLES
+
+
+@pytest.mark.parametrize("table", sorted(ONBOARDING_TABLES))
+def test_onboarding_tables_are_tenant_owned(db, table):
+    command.upgrade(alembic_config(db), "head")
+    t = schema(db)[table]
+    assert t["columns"]["org_id"][1] is False                      # org_id NOT NULL
+    assert (f"ix_{table}_org_id_created_at", ("org_id", "created_at"), False) in t["indexes"]
+
+
+def test_onboarding_columns(db):
+    command.upgrade(alembic_config(db), "head")
+    s = schema(db)
+    assert set(s["vendor_engagements"]["columns"]) == {
+        "id", "org_id", "vendor_name", "company_name", "invite_token_hash",
+        "invite_expires_at", "status", "created_at"}
+    assert set(s["vendor_documents"]["columns"]) == {
+        "id", "org_id", "engagement_id", "kind", "filename", "content_type", "size_bytes",
+        "sha256", "storage_key", "parse_status", "parse_error", "extracted", "evidence_tier",
+        "created_at"}
+    assert set(s["questionnaire_answers"]["columns"]) == {
+        "id", "org_id", "engagement_id", "question_id", "value", "source_document_id",
+        "source_page", "source_quote", "confidence", "status", "created_at", "updated_at"}
+    assert ("invite_token_hash",) in s["vendor_engagements"]["unique"]
+    assert ("engagement_id", "question_id") in s["questionnaire_answers"]["unique"]
+
+
+def _sqlite_with_foreign_keys(db_path: Path):
+    engine = sa.create_engine(f"sqlite:///{db_path.as_posix()}")
+
+    @sa.event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _record):
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+    return engine
+
+
+def test_onboarding_rows_round_trip_and_constraints_hold(db):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    from app.db.models import QuestionnaireAnswer, VendorDocument, VendorEngagement
+
+    command.upgrade(alembic_config(db), "head")
+    org = "00000000-0000-0000-0000-00000000aaaa"
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    engine = _sqlite_with_foreign_keys(db)
+    try:
+        with Session(engine) as session:
+            engagement = VendorEngagement(org_id=org, vendor_name="Acme Cloud", company_name="Client Co",
+                                          invite_token_hash="a" * 64, invite_expires_at=expires)
+            session.add(engagement)
+            session.flush()
+            document = VendorDocument(
+                org_id=org, engagement_id=engagement.id, kind="soc2", filename="soc2.pdf",
+                content_type="application/pdf", size_bytes=10, sha256="b" * 64,
+                storage_key=f"{engagement.id}/soc2.pdf", extracted={"report_type": "type2"})
+            session.add(document)
+            session.flush()
+            session.add(QuestionnaireAnswer(
+                org_id=org, engagement_id=engagement.id, question_id="IAM-01",
+                value={"answer": "yes"}, source_document_id=document.id, source_page=12,
+                source_quote="MFA is enforced", confidence=0.9, status="suggested"))
+            session.commit()
+            engagement_id = engagement.id
+
+        with Session(engine) as session:
+            e = session.get(VendorEngagement, engagement_id)
+            assert e is not None and e.org_id == org and e.status == "invited"
+            d = session.scalars(sa.select(VendorDocument)).one()
+            assert d.parse_status == "pending" and d.extracted == {"report_type": "type2"}
+            a = session.scalars(sa.select(QuestionnaireAnswer)).one()
+            assert a.value == {"answer": "yes"} and a.source_document_id == d.id
+
+        invalid_rows = [
+            # one answer per (engagement, question)
+            QuestionnaireAnswer(org_id=org, engagement_id=engagement_id, question_id="IAM-01",
+                                status="unanswered"),
+            # kinds and statuses are restricted
+            VendorDocument(org_id=org, engagement_id=engagement_id, kind="pdf", filename="x",
+                           content_type="x", size_bytes=1, sha256="c" * 64, storage_key="x"),
+            QuestionnaireAnswer(org_id=org, engagement_id=engagement_id, question_id="IAM-02",
+                                status="maybe"),
+            # org_id is required
+            VendorEngagement(vendor_name="v", company_name="c", invite_token_hash="d" * 64,
+                             invite_expires_at=expires),
+            # the invite token hash is unique
+            VendorEngagement(org_id=org, vendor_name="v", company_name="c",
+                             invite_token_hash="a" * 64, invite_expires_at=expires),
+        ]
+        for row in invalid_rows:
+            with Session(engine) as session:
+                session.add(row)
+                with pytest.raises(IntegrityError):
+                    session.flush()
+
+        with Session(engine) as session:
+            # deleting an engagement removes its documents and answers
+            session.execute(sa.delete(VendorEngagement).where(VendorEngagement.id == engagement_id))
+            session.commit()
+            assert session.scalars(sa.select(VendorDocument)).all() == []
+            assert session.scalars(sa.select(QuestionnaireAnswer)).all() == []
+    finally:
+        engine.dispose()
 
 
 # ── Startup no longer creates tables ──────────────────────
@@ -257,7 +413,11 @@ def test_postgres_upgrade_check_and_downgrade(pg_url):
     command.upgrade(cfg, "head")
     assert set(pg_schema(pg_url)) == TABLES
     assert pg_schema(pg_url)["evaluations"]["agent_outputs"][0] == "JSONB"
+    assert pg_schema(pg_url)["vendor_documents"]["extracted"][0] == "JSONB"
+    assert pg_schema(pg_url)["vendor_engagements"]["org_id"] == ("UUID", False)
     command.check(cfg)
+    command.downgrade(cfg, "0001")
+    assert set(pg_schema(pg_url)) == BASELINE_TABLES
     command.downgrade(cfg, "base")
     assert pg_schema(pg_url) == {}
 
@@ -273,9 +433,11 @@ def test_postgres_migrated_schema_matches_create_all(pg_url):
 
 @requires_postgres
 def test_postgres_create_all_database_is_refused_then_stamped(pg_url):
-    pg_run(pg_url, Base.metadata.create_all)       # what Supabase looked like
+    baseline = [Base.metadata.tables[t] for t in sorted(BASELINE_TABLES)]
+    pg_run(pg_url, lambda conn: Base.metadata.create_all(conn, tables=baseline))   # what Supabase looked like
     cfg = pg_config(pg_url)
     with pytest.raises(Exception, match="alembic stamp 0001"):
         command.upgrade(cfg, "head")
     command.stamp(cfg, "0001")
+    command.upgrade(cfg, "head")
     command.check(cfg)
